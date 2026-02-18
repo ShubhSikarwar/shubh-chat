@@ -4,15 +4,16 @@ import { Login } from './components/Login';
 import { Sidebar } from './components/Sidebar';
 import { ChatWindow } from './components/ChatWindow';
 import { db } from './firebase';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
-import { Chat } from './types';
+import { collection, query, where, onSnapshot, getDocs } from 'firebase/firestore';
+import { Chat, UserProfile } from './types';
 
 const MainApp: React.FC = () => {
   const { user, loading } = useAuth();
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [isShaking, setIsShaking] = useState(false);
+  const [buzzNotification, setBuzzNotification] = useState<{ senderName: string, id: string } | null>(null);
 
-  // Global Buzz Listener: When someone buzzes User A, User A is moved to that chat automatically.
+  // Global Buzz Listener
   useEffect(() => {
     if (!user) return;
 
@@ -22,25 +23,28 @@ const MainApp: React.FC = () => {
     );
 
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      snapshot.docChanges().forEach((change) => {
+      snapshot.docChanges().forEach(async (change) => {
         if (change.type === 'modified') {
           const data = { id: change.doc.id, ...change.doc.data() } as Chat;
 
           if (data.buzz && data.buzz.senderId !== user.uid) {
             const buzzTime = data.buzz.timestamp?.toMillis() || 0;
-            // Use a wider window (5s) for freshness to account for potential clock skew
             const isFresh = Math.abs(Date.now() - buzzTime) < 5000;
 
-            if (isFresh) {
-              // Trigger shake effect globally
+            if (isFresh && !isShaking) {
+              // Trigger shake effect globally (4 seconds)
               setIsShaking(true);
               const audio = new Audio('/notification.mp3');
               audio.play().catch(e => console.log("Global buzz audio error", e));
-              setTimeout(() => setIsShaking(false), 1000);
 
-              if (activeChatId !== data.id) {
-                setActiveChatId(data.id);
-              }
+              // Find sender name for popup
+              const userSnap = await getDocs(query(collection(db, 'users'), where('uid', '==', data.buzz.senderId)));
+              const senderData = userSnap.docs[0]?.data() as UserProfile;
+
+              setBuzzNotification({ senderName: senderData?.displayName || 'Someone', id: data.id });
+
+              setTimeout(() => setBuzzNotification(null), 3000);
+              setTimeout(() => setIsShaking(false), 4000);
             }
           }
         }
@@ -48,7 +52,7 @@ const MainApp: React.FC = () => {
     });
 
     return unsubscribe;
-  }, [user, activeChatId]);
+  }, [user, isShaking]);
 
   if (loading) {
     return (
@@ -65,6 +69,34 @@ const MainApp: React.FC = () => {
 
   return (
     <div className={`app-container ${isShaking ? 'shake' : ''}`}>
+      {buzzNotification && (
+        <div
+          onClick={() => {
+            setActiveChatId(buzzNotification.id);
+            setBuzzNotification(null);
+          }}
+          style={{
+            position: 'absolute',
+            top: '20px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            background: 'var(--accent)',
+            color: 'white',
+            padding: '12px 24px',
+            borderRadius: '30px',
+            boxShadow: '0 4px 15px rgba(0,0,0,0.4)',
+            zIndex: 9999,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            cursor: 'pointer',
+            animation: 'fadeIn 0.3s ease-out'
+          }}
+        >
+          <span style={{ fontSize: '18px' }}>🔔</span>
+          <span style={{ fontWeight: 'bold' }}>{buzzNotification.senderName} is buzzing you!</span>
+        </div>
+      )}
       <Sidebar onSelectChat={(id) => setActiveChatId(id)} />
       <ChatWindow chatId={activeChatId || ''} />
     </div>

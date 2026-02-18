@@ -288,14 +288,13 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
         if (!user || !chatId) return;
 
         const now = Timestamp.now();
-        const fiveMinsAgo = now.toMillis() - 5 * 60 * 1000;
+        const oneMinAgo = now.toMillis() - 1 * 60 * 1000;
 
         const myLastBuzzes = chatData?.lastBuzzes?.[user.uid] || [];
-        // Extract toMillis if it's a Timestamp object
-        const recentBuzzes = myLastBuzzes.filter((t: any) => (t.toMillis ? t.toMillis() : t.seconds * 1000) > fiveMinsAgo);
+        const recentBuzzes = myLastBuzzes.filter((t: any) => (t.toMillis ? t.toMillis() : t.seconds * 1000) > oneMinAgo);
 
-        if (recentBuzzes.length >= 2) {
-            alert("Take a breath! You can only buzz 2 times every 5 minutes.");
+        if (recentBuzzes.length >= 1) {
+            alert("Slow down! You can only buzz once per minute.");
             return;
         }
 
