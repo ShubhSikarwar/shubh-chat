@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
 import { collection, query, where, onSnapshot, getDocs, addDoc, serverTimestamp, doc, updateDoc } from 'firebase/firestore';
@@ -12,6 +12,7 @@ const ChatListItem: React.FC<{
     approveRequest: (id: string) => void
 }> = ({ chat, currentUser, onSelectChat, approveRequest }) => {
     const [unreadCount, setUnreadCount] = useState(0);
+    const prevUnreadCount = useRef(0);
 
     useEffect(() => {
         if (!currentUser || chat.status !== 'accepted') return;
@@ -24,7 +25,16 @@ const ChatListItem: React.FC<{
         const unsubscribe = onSnapshot(q, (snapshot) => {
             // Firestore doesn't allow multiple '!=' filters, so we filter senderId client-side
             const unreadDocs = snapshot.docs.filter(doc => doc.data().senderId !== currentUser.uid);
-            setUnreadCount(unreadDocs.length);
+            const newCount = unreadDocs.length;
+
+            if (newCount > prevUnreadCount.current) {
+                // Play notification sound
+                const audio = new Audio('/notification.mp3');
+                audio.play().catch(err => console.log("Audio play blocked", err));
+            }
+
+            setUnreadCount(newCount);
+            prevUnreadCount.current = newCount;
         });
 
         return unsubscribe;
