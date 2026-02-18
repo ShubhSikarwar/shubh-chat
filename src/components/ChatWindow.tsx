@@ -130,8 +130,32 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
         setNewMessage(prev => prev + emojiData.emoji);
     };
 
+    const EMOJI_MAP: { [key: string]: string } = {
+        ':)': '😊',
+        ':(': '😟',
+        ':D': '😃',
+        ';)': '😉',
+        '<3': '❤️',
+        ':P': '😛',
+        ':p': '😛',
+        'B)': '😎',
+        ':/': '😕',
+        ':O': '😲',
+        ':o': '😲',
+    };
+
     const handleInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        setNewMessage(e.target.value);
+        let value = e.target.value;
+
+        // Convert text emoticons to emojis
+        Object.entries(EMOJI_MAP).forEach(([emoticon, emoji]) => {
+            // Only replace if it's the end of a word or separated by spaces
+            const escapedEmoticon = emoticon.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const regex = new RegExp(`${escapedEmoticon}(?=\\s|$)`, 'g');
+            value = value.replace(regex, emoji);
+        });
+
+        setNewMessage(value);
 
         if (!user || !chatId) return;
 
