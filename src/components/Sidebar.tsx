@@ -5,17 +5,111 @@ import { collection, query, where, onSnapshot, getDocs, addDoc, serverTimestamp,
 import { UserProfile, Chat } from '../types';
 import { LogOut, Search, MessageSquarePlus, UserPlus, Check, X } from 'lucide-react';
 
+const ChatListItem: React.FC<{
+    chat: Chat & { otherUser?: UserProfile },
+    currentUser: any,
+    onSelectChat: (id: string) => void,
+    approveRequest: (id: string) => void
+}> = ({ chat, currentUser, onSelectChat, approveRequest }) => {
+    const [unreadCount, setUnreadCount] = useState(0);
+
+    useEffect(() => {
+        if (!currentUser || chat.status !== 'accepted') return;
+
+        const q = query(
+            collection(db, 'chats', chat.id, 'messages'),
+            where('senderId', '!=', currentUser.uid),
+            where('status', '!=', 'seen')
+        );
+
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            setUnreadCount(snapshot.docs.length);
+        });
+
+        return unsubscribe;
+    }, [chat.id, chat.status, currentUser]);
+
+    return (
+        <div
+            onClick={() => chat.status === 'accepted' && onSelectChat(chat.id)}
+            style={{
+                padding: '12px 16px',
+                display: 'flex',
+                gap: '12px',
+                cursor: chat.status === 'accepted' ? 'pointer' : 'default',
+                borderBottom: '1px solid var(--border)',
+                transition: 'background 0.2s'
+            }}
+            onMouseOver={(e) => e.currentTarget.style.background = 'var(--bg-active)'}
+            onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
+        >
+            <img src={chat.otherUser?.photoURL || ''} style={{ width: '48px', height: '48px', borderRadius: '50%' }} />
+            <div style={{ flex: 1 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ fontWeight: '500' }}>{chat.otherUser?.displayName}</span>
+                    {chat.lastMessageTimestamp && (
+                        <span style={{ fontSize: '12px', color: unreadCount > 0 ? 'var(--accent)' : 'var(--text-dim)' }}>
+                            {new Date(chat.lastMessageTimestamp.toMillis()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                    )}
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
+                    <p style={{
+                        fontSize: '13px',
+                        color: unreadCount > 0 ? 'var(--text-primary)' : 'var(--text-secondary)',
+                        maxWidth: '180px',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        fontWeight: unreadCount > 0 ? '600' : '400'
+                    }}>
+                        {chat.status === 'pending' ? (chat.requestedBy === currentUser?.uid ? 'Pending approval' : 'Wants to chat') : chat.lastMessage}
+                    </p>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        {chat.status === 'pending' && chat.requestedBy !== currentUser?.uid ? (
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                                <button onClick={(e) => { e.stopPropagation(); approveRequest(chat.id); }} style={{ color: 'var(--accent)' }}>
+                                    <Check size={18} />
+                                </button>
+                                <button style={{ color: '#ef4444' }}>
+                                    <X size={18} />
+                                </button>
+                            </div>
+                        ) : (
+                            unreadCount > 0 && (
+                                <div style={{
+                                    background: 'var(--accent)',
+                                    color: 'white',
+                                    borderRadius: '50%',
+                                    minWidth: '20px',
+                                    height: '20px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    fontSize: '11px',
+                                    fontWeight: 'bold',
+                                    padding: '0 6px'
+                                }}>
+                                    {unreadCount}
+                                </div>
+                            )
+                        )}
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 export const Sidebar: React.FC<{ onSelectChat: (chatId: string) => void }> = ({ onSelectChat }) => {
     const { user, logout } = useAuth();
     const [chats, setChats] = useState<(Chat & { otherUser?: UserProfile })[]>([]);
     const [searchEmail, setSearchEmail] = useState('');
     const [searchResults, setSearchResults] = useState<UserProfile[]>([]);
 
-
     useEffect(() => {
         if (!user) return;
 
-        // Listen to chats where user is a participant
         const q = query(
             collection(db, 'chats'),
             where('participants', 'array-contains', user.uid)
@@ -24,13 +118,10 @@ export const Sidebar: React.FC<{ onSelectChat: (chatId: string) => void }> = ({ 
         const unsubscribe = onSnapshot(q, async (snapshot) => {
             const chatData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Chat));
 
-            // Fetch details for other participants
             const chatsWithUsers = await Promise.all(chatData.map(async (chat) => {
                 const otherId = chat.participants.find(id => id !== user.uid);
                 if (!otherId) return chat;
 
-                // This is a bit inefficient (N queries), but for this demo it's fine.
-                // In production, you'd cache user profiles or denormalize data.
                 const userSnap = await getDocs(query(collection(db, 'users'), where('uid', '==', otherId)));
                 const otherUser = userSnap.docs[0]?.data() as UserProfile;
                 return { ...chat, otherUser };
@@ -50,11 +141,9 @@ export const Sidebar: React.FC<{ onSelectChat: (chatId: string) => void }> = ({ 
         const q = query(collection(db, 'users'), where('email', '==', searchEmail));
         const snap = await getDocs(q);
         setSearchResults(snap.docs.map(doc => doc.data() as UserProfile));
-
     };
 
     const sendRequest = async (targetUser: UserProfile) => {
-        // Check if chat already exists
         const existing = chats.find(c => c.participants.includes(targetUser.uid));
         if (existing) {
             alert("Chat/Request already exists!");
@@ -155,47 +244,13 @@ export const Sidebar: React.FC<{ onSelectChat: (chatId: string) => void }> = ({ 
             {/* Chat List */}
             <div style={{ flex: 1, overflowY: 'auto' }}>
                 {chats.map(chat => (
-                    <div
+                    <ChatListItem
                         key={chat.id}
-                        onClick={() => chat.status === 'accepted' && onSelectChat(chat.id)}
-                        style={{
-                            padding: '12px 16px',
-                            display: 'flex',
-                            gap: '12px',
-                            cursor: chat.status === 'accepted' ? 'pointer' : 'default',
-                            borderBottom: '1px solid var(--border)',
-                            transition: 'background 0.2s'
-                        }}
-                        onMouseOver={(e) => e.currentTarget.style.background = 'var(--bg-active)'}
-                        onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
-                    >
-                        <img src={chat.otherUser?.photoURL || ''} style={{ width: '48px', height: '48px', borderRadius: '50%' }} />
-                        <div style={{ flex: 1 }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                                <span style={{ fontWeight: '500' }}>{chat.otherUser?.displayName}</span>
-                                {chat.lastMessageTimestamp && (
-                                    <span style={{ fontSize: '12px', color: 'var(--text-dim)' }}>
-                                        {new Date(chat.lastMessageTimestamp.toMillis()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                    </span>
-                                )}
-                            </div>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
-                                <p style={{ fontSize: '13px', color: 'var(--text-secondary)', maxWidth: '180px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                    {chat.status === 'pending' ? (chat.requestedBy === user?.uid ? 'Pending approval' : 'Wants to chat') : chat.lastMessage}
-                                </p>
-                                {chat.status === 'pending' && chat.requestedBy !== user?.uid && (
-                                    <div style={{ display: 'flex', gap: '8px' }}>
-                                        <button onClick={(e) => { e.stopPropagation(); approveRequest(chat.id); }} style={{ color: 'var(--accent)' }}>
-                                            <Check size={18} />
-                                        </button>
-                                        <button style={{ color: '#ef4444' }}>
-                                            <X size={18} />
-                                        </button>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    </div>
+                        chat={chat}
+                        currentUser={user}
+                        onSelectChat={onSelectChat}
+                        approveRequest={approveRequest}
+                    />
                 ))}
             </div>
         </div>
