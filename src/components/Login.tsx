@@ -37,7 +37,7 @@ export const Login: React.FC = () => {
                 }}>
                     <MessageSquare size={40} color="white" />
                 </div>
-                <h1 style={{ marginBottom: '8px', fontSize: '24px' }}>WhatsApp Clone</h1>
+                <h1 style={{ marginBottom: '8px', fontSize: '24px' }}>Shubh Chat</h1>
                 <p style={{ color: 'var(--text-secondary)', marginBottom: '32px' }}>
                     Connect with your friends and family instantly.
                 </p>

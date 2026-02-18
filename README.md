@@ -1,6 +1,6 @@
-# WhatsApp Web Clone
+# Shubh Chat
 
-A premium WhatsApp Web clone built with React, TypeScript, and Firebase.
+A premium real-time chat application built with React, TypeScript, and Firebase.
 
 ## ✨ Features
 - **Google Authentication**: Easy sign-in with Gmail.

@@ -72,7 +72,7 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-chat)' }}>
             <div style={{ textAlign: 'center', opacity: 0.5 }}>
                 <img src="https://abs.twimg.com/emoji/v2/72x72/1f4ac.png" alt="Select chat" width="100" />
-                <h2>WhatsApp for Web</h2>
+                <h2>Shubh Chat</h2>
                 <p>Select a chat to start messaging</p>
             </div>
         </div>
