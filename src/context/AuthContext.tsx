@@ -18,50 +18,69 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, async (authenticatedUser) => {
-            if (authenticatedUser) {
-                const userRef = doc(db, 'users', authenticatedUser.uid);
-                await setDoc(userRef, {
-                    uid: authenticatedUser.uid,
-                    displayName: authenticatedUser.displayName,
-                    photoURL: authenticatedUser.photoURL,
-                    email: authenticatedUser.email,
-                    lastSeen: serverTimestamp(),
-                    status: 'online'
-                }, { merge: true });
-                setUser(authenticatedUser);
-
-                // Handle presence
-                const setStatus = async (status: 'online' | 'offline') => {
+            try {
+                if (authenticatedUser) {
+                    const userRef = doc(db, 'users', authenticatedUser.uid);
                     await setDoc(userRef, {
-                        status,
-                        lastSeen: serverTimestamp()
+                        uid: authenticatedUser.uid,
+                        displayName: authenticatedUser.displayName,
+                        photoURL: authenticatedUser.photoURL,
+                        email: authenticatedUser.email,
+                        lastSeen: serverTimestamp(),
+                        status: 'online'
                     }, { merge: true });
-                };
-
-                const handleVisibilityChange = () => {
-                    setStatus(document.visibilityState === 'visible' ? 'online' : 'offline');
-                };
-
-                const handleBeforeUnload = () => {
-                    // Note: This is best-effort. Browsers may not complete the request.
-                    setStatus('offline');
-                };
-
-                document.addEventListener('visibilitychange', handleVisibilityChange);
-                window.addEventListener('beforeunload', handleBeforeUnload);
-
-                return () => {
-                    document.removeEventListener('visibilitychange', handleVisibilityChange);
-                    window.removeEventListener('beforeunload', handleBeforeUnload);
-                };
-            } else {
-                setUser(null);
+                    setUser(authenticatedUser);
+                } else {
+                    setUser(null);
+                }
+            } catch (error) {
+                console.error("Auth initialization error:", error);
+            } finally {
+                setLoading(false);
             }
-            setLoading(false);
         });
 
         return unsubscribe;
     }, []);
+
+    // Presence Logic
+    useEffect(() => {
+        if (!user) return;
+
+        const userRef = doc(db, 'users', user.uid);
+
+        const setStatus = async (status: 'online' | 'offline') => {
+            try {
+                await setDoc(userRef, {
+                    status,
+                    lastSeen: serverTimestamp()
+                }, { merge: true });
+            } catch (e) {
+                console.error("Presence update failed", e);
+            }
+        };
+
+        const handleVisibilityChange = () => {
+            setStatus(document.visibilityState === 'visible' ? 'online' : 'offline');
+        };
+
+        const handleBeforeUnload = () => {
+            // navigator.sendBeacon could be used here for more reliability in production
+            setStatus('offline');
+        };
+
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        window.addEventListener('beforeunload', handleBeforeUnload);
+
+        // Set online initially
+        setStatus('online');
+
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+            window.removeEventListener('beforeunload', handleBeforeUnload);
+            setStatus('offline');
+        };
+    }, [user]);
 
     const login = async () => {
         try {

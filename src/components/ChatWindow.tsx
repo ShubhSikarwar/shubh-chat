@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
-import { collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, doc, updateDoc } from 'firebase/firestore';
+import { collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, doc, updateDoc, writeBatch } from 'firebase/firestore';
 import { Message, UserProfile } from '../types';
 import { Send, Smile, Paperclip, MoreVertical, Search, Phone, Video, Check, CheckCheck } from 'lucide-react';
-import { writeBatch } from 'firebase/firestore';
 
 export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
     const { user } = useAuth();
@@ -15,66 +14,68 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
     const scrollRef = useRef<HTMLDivElement>(null);
     const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+    // Listens to Chat Metadata (participants, lastMessage, typing status)
     useEffect(() => {
-        if (!chatId) return;
+        if (!chatId || !user) return;
 
-        // Listen to chat info and other user profile
-        const unsubscribeChat = onSnapshot(doc(db, 'chats', chatId), (chatSnap) => {
-            if (chatSnap.exists()) {
-                const data = chatSnap.data();
+        const unsubscribe = onSnapshot(doc(db, 'chats', chatId), (snapshot) => {
+            if (snapshot.exists()) {
+                const data = snapshot.data();
                 const participants = data.participants as string[];
-                const otherId = participants.find(id => id !== user?.uid);
+                const otherId = participants.find(id => id !== user.uid);
 
                 // Typing status
-                const typingStatus = data.typing || {};
-                setIsOtherTyping(!!otherId && !!typingStatus[otherId]);
-
                 if (otherId) {
-                    // Real-time status for the other user
-                    const unsubscribeUser = onSnapshot(doc(db, 'users', otherId), (userSnap) => {
-                        setOtherUser(userSnap.data() as UserProfile);
-                    });
-                    return () => unsubscribeUser();
+                    const typingStatus = data.typing || {};
+                    setIsOtherTyping(!!typingStatus[otherId]);
                 }
             }
         });
 
-        // Listen to messages
+        return unsubscribe;
+    }, [chatId, user]);
+
+    // Listens to Other User's Profile (presence, photo, name)
+    useEffect(() => {
+        if (!chatId || !user) return;
+
+        let unsubscribeUser: () => void = () => { };
+
+        const unsubscribeChat = onSnapshot(doc(db, 'chats', chatId), (snapshot) => {
+            if (snapshot.exists()) {
+                const participants = snapshot.data().participants as string[];
+                const otherId = participants.find(id => id !== user.uid);
+
+                if (otherId) {
+                    unsubscribeUser(); // Cleanup previous listener if any
+                    unsubscribeUser = onSnapshot(doc(db, 'users', otherId), (userSnap) => {
+                        setOtherUser(userSnap.data() as UserProfile);
+                    });
+                }
+            }
+        });
+
+        return () => {
+            unsubscribeChat();
+            unsubscribeUser();
+        };
+    }, [chatId, user]);
+
+    // Listens to Messages
+    useEffect(() => {
+        if (!chatId) return;
+
         const q = query(
             collection(db, 'chats', chatId, 'messages'),
             orderBy('timestamp', 'asc')
         );
 
-        const unsubscribeMessages = onSnapshot(q, (snapshot) => {
+        const unsubscribe = onSnapshot(q, (snapshot) => {
             setMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Message)));
         });
 
-        return () => {
-            unsubscribeChat();
-            unsubscribeMessages();
-        };
-    }, [chatId, user]);
-
-    const handleInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        setNewMessage(e.target.value);
-
-        if (!user) return;
-
-        // Set typing status to true
-        await updateDoc(doc(db, 'chats', chatId), {
-            [`typing.${user.uid}`]: true
-        });
-
-        // Clear existing timeout
-        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-
-        // Set timeout to set typing status to false after 2 seconds
-        typingTimeoutRef.current = setTimeout(async () => {
-            await updateDoc(doc(db, 'chats', chatId), {
-                [`typing.${user.uid}`]: false
-            });
-        }, 2000);
-    };
+        return unsubscribe;
+    }, [chatId]);
 
     // Mark messages as seen
     useEffect(() => {
@@ -102,9 +103,32 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
         scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
 
+    const handleInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        setNewMessage(e.target.value);
+
+        if (!user || !chatId) return;
+
+        // Set typing status to true
+        await updateDoc(doc(db, 'chats', chatId), {
+            [`typing.${user.uid}`]: true
+        });
+
+        // Clear existing timeout
+        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+
+        // Set timeout to set typing status to false after 2 seconds
+        typingTimeoutRef.current = setTimeout(async () => {
+            if (chatId) {
+                await updateDoc(doc(db, 'chats', chatId), {
+                    [`typing.${user.uid}`]: false
+                });
+            }
+        }, 2000);
+    };
+
     const handleSend = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!newMessage.trim()) return;
+        if (!newMessage.trim() || !user || !chatId) return;
 
         const messageText = newMessage;
         setNewMessage('');
@@ -112,13 +136,13 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
         // Stop typing immediately on send
         if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
         await updateDoc(doc(db, 'chats', chatId), {
-            [`typing.${user?.uid}`]: false
+            [`typing.${user.uid}`]: false
         });
 
         // Add message to subcollection
         await addDoc(collection(db, 'chats', chatId, 'messages'), {
             text: messageText,
-            senderId: user?.uid,
+            senderId: user.uid,
             timestamp: serverTimestamp(),
             type: 'text',
             status: 'sent'
