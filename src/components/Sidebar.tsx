@@ -10,7 +10,7 @@ export const Sidebar: React.FC<{ onSelectChat: (chatId: string) => void }> = ({ 
     const [chats, setChats] = useState<(Chat & { otherUser?: UserProfile })[]>([]);
     const [searchEmail, setSearchEmail] = useState('');
     const [searchResults, setSearchResults] = useState<UserProfile[]>([]);
-    const [isSearching, setIsSearching] = useState(false);
+
 
     useEffect(() => {
         if (!user) return;
@@ -46,11 +46,11 @@ export const Sidebar: React.FC<{ onSelectChat: (chatId: string) => void }> = ({ 
 
     const handleSearch = async () => {
         if (!searchEmail.trim() || searchEmail === user?.email) return;
-        setIsSearching(true);
+
         const q = query(collection(db, 'users'), where('email', '==', searchEmail));
         const snap = await getDocs(q);
         setSearchResults(snap.docs.map(doc => doc.data() as UserProfile));
-        setIsSearching(false);
+
     };
 
     const sendRequest = async (targetUser: UserProfile) => {

@@ -112,8 +112,7 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
                 flex: 1,
                 overflowY: 'auto',
                 padding: '20px 5%',
-                backgroundImage: 'url("https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png")',
-                backgroundOpacity: 0.05
+                backgroundImage: 'linear-gradient(rgba(11, 20, 26, 0.95), rgba(11, 20, 26, 0.95)), url("https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png")',
             }}>
                 {messages.map(msg => (
                     <div key={msg.id} style={{
