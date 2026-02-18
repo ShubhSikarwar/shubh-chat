@@ -16,6 +16,7 @@ export interface Chat {
     lastMessageTimestamp?: Timestamp;
     status: 'pending' | 'accepted' | 'rejected';
     requestedBy: string; // UID of the person who sent the request
+    typing?: { [uid: string]: boolean };
 }
 
 export interface Message {

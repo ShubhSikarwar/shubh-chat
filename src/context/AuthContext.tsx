@@ -17,19 +17,43 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        const unsubscribe = onAuthStateChanged(auth, async (user) => {
-            if (user) {
-                // Update user profile in Firestore
-                const userRef = doc(db, 'users', user.uid);
+        const unsubscribe = onAuthStateChanged(auth, async (authenticatedUser) => {
+            if (authenticatedUser) {
+                const userRef = doc(db, 'users', authenticatedUser.uid);
                 await setDoc(userRef, {
-                    uid: user.uid,
-                    displayName: user.displayName,
-                    photoURL: user.photoURL,
-                    email: user.email,
+                    uid: authenticatedUser.uid,
+                    displayName: authenticatedUser.displayName,
+                    photoURL: authenticatedUser.photoURL,
+                    email: authenticatedUser.email,
                     lastSeen: serverTimestamp(),
                     status: 'online'
                 }, { merge: true });
-                setUser(user);
+                setUser(authenticatedUser);
+
+                // Handle presence
+                const setStatus = async (status: 'online' | 'offline') => {
+                    await setDoc(userRef, {
+                        status,
+                        lastSeen: serverTimestamp()
+                    }, { merge: true });
+                };
+
+                const handleVisibilityChange = () => {
+                    setStatus(document.visibilityState === 'visible' ? 'online' : 'offline');
+                };
+
+                const handleBeforeUnload = () => {
+                    // Note: This is best-effort. Browsers may not complete the request.
+                    setStatus('offline');
+                };
+
+                document.addEventListener('visibilitychange', handleVisibilityChange);
+                window.addEventListener('beforeunload', handleBeforeUnload);
+
+                return () => {
+                    document.removeEventListener('visibilitychange', handleVisibilityChange);
+                    window.removeEventListener('beforeunload', handleBeforeUnload);
+                };
             } else {
                 setUser(null);
             }

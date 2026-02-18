@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
-import { collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, doc, getDoc, updateDoc } from 'firebase/firestore';
+import { collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, doc, updateDoc } from 'firebase/firestore';
 import { Message, UserProfile } from '../types';
 import { Send, Smile, Paperclip, MoreVertical, Search, Phone, Video, Check, CheckCheck } from 'lucide-react';
 import { writeBatch } from 'firebase/firestore';
@@ -11,24 +11,33 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
     const [messages, setMessages] = useState<Message[]>([]);
     const [newMessage, setNewMessage] = useState('');
     const [otherUser, setOtherUser] = useState<UserProfile | null>(null);
+    const [isOtherTyping, setIsOtherTyping] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
+    const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
     useEffect(() => {
         if (!chatId) return;
 
-        // Fetch other user info
-        const fetchChatInfo = async () => {
-            const chatSnap = await getDoc(doc(db, 'chats', chatId));
+        // Listen to chat info and other user profile
+        const unsubscribeChat = onSnapshot(doc(db, 'chats', chatId), (chatSnap) => {
             if (chatSnap.exists()) {
-                const participants = chatSnap.data().participants as string[];
+                const data = chatSnap.data();
+                const participants = data.participants as string[];
                 const otherId = participants.find(id => id !== user?.uid);
+
+                // Typing status
+                const typingStatus = data.typing || {};
+                setIsOtherTyping(!!otherId && !!typingStatus[otherId]);
+
                 if (otherId) {
-                    const userSnap = await getDoc(doc(db, 'users', otherId));
-                    setOtherUser(userSnap.data() as UserProfile);
+                    // Real-time status for the other user
+                    const unsubscribeUser = onSnapshot(doc(db, 'users', otherId), (userSnap) => {
+                        setOtherUser(userSnap.data() as UserProfile);
+                    });
+                    return () => unsubscribeUser();
                 }
             }
-        };
-        fetchChatInfo();
+        });
 
         // Listen to messages
         const q = query(
@@ -36,12 +45,36 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
             orderBy('timestamp', 'asc')
         );
 
-        const unsubscribe = onSnapshot(q, (snapshot) => {
+        const unsubscribeMessages = onSnapshot(q, (snapshot) => {
             setMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Message)));
         });
 
-        return unsubscribe;
+        return () => {
+            unsubscribeChat();
+            unsubscribeMessages();
+        };
     }, [chatId, user]);
+
+    const handleInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        setNewMessage(e.target.value);
+
+        if (!user) return;
+
+        // Set typing status to true
+        await updateDoc(doc(db, 'chats', chatId), {
+            [`typing.${user.uid}`]: true
+        });
+
+        // Clear existing timeout
+        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+
+        // Set timeout to set typing status to false after 2 seconds
+        typingTimeoutRef.current = setTimeout(async () => {
+            await updateDoc(doc(db, 'chats', chatId), {
+                [`typing.${user.uid}`]: false
+            });
+        }, 2000);
+    };
 
     // Mark messages as seen
     useEffect(() => {
@@ -75,6 +108,12 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
 
         const messageText = newMessage;
         setNewMessage('');
+
+        // Stop typing immediately on send
+        if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+        await updateDoc(doc(db, 'chats', chatId), {
+            [`typing.${user?.uid}`]: false
+        });
 
         // Add message to subcollection
         await addDoc(collection(db, 'chats', chatId, 'messages'), {
@@ -118,8 +157,8 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
                     <img src={otherUser?.photoURL || ''} style={{ width: '40px', height: '40px', borderRadius: '50%' }} />
                     <div>
                         <h3 style={{ fontSize: '16px', fontWeight: '500' }}>{otherUser?.displayName}</h3>
-                        <p style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-                            {otherUser?.status === 'online' ? 'online' : 'offline'}
+                        <p style={{ fontSize: '12px', color: isOtherTyping ? 'var(--accent)' : 'var(--text-secondary)' }}>
+                            {isOtherTyping ? 'typing...' : (otherUser?.status === 'online' ? 'online' : 'offline')}
                         </p>
                     </div>
                 </div>
@@ -192,7 +231,7 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
                         type="text"
                         placeholder="Type a message"
                         value={newMessage}
-                        onChange={(e) => setNewMessage(e.target.value)}
+                        onChange={handleInputChange}
                         style={{
                             width: '100%',
                             background: 'var(--bg-active)',

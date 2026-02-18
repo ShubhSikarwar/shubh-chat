@@ -57,14 +57,17 @@ const ChatListItem: React.FC<{
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '4px' }}>
                     <p style={{
                         fontSize: '13px',
-                        color: unreadCount > 0 ? 'var(--text-primary)' : 'var(--text-secondary)',
+                        color: (chat.typing?.[chat.participants.find(id => id !== currentUser.uid) || ''] || unreadCount > 0) ? 'var(--accent)' : 'var(--text-secondary)',
                         maxWidth: '180px',
                         whiteSpace: 'nowrap',
                         overflow: 'hidden',
                         textOverflow: 'ellipsis',
-                        fontWeight: unreadCount > 0 ? '600' : '400'
+                        fontWeight: (chat.typing?.[chat.participants.find(id => id !== currentUser.uid) || ''] || unreadCount > 0) ? '600' : '400'
                     }}>
-                        {chat.status === 'pending' ? (chat.requestedBy === currentUser?.uid ? 'Pending approval' : 'Wants to chat') : chat.lastMessage}
+                        {chat.status === 'pending' ?
+                            (chat.requestedBy === currentUser?.uid ? 'Pending approval' : 'Wants to chat') :
+                            (chat.typing?.[chat.participants.find(id => id !== currentUser.uid) || ''] ? 'typing...' : chat.lastMessage)
+                        }
                     </p>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         {chat.status === 'pending' && chat.requestedBy !== currentUser?.uid ? (
