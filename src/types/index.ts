@@ -24,4 +24,5 @@ export interface Message {
     senderId: string;
     timestamp: Timestamp;
     type: 'text' | 'image';
+    status?: 'sent' | 'delivered' | 'seen';
 }

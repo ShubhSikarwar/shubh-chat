@@ -3,7 +3,8 @@ import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
 import { collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, doc, getDoc, updateDoc } from 'firebase/firestore';
 import { Message, UserProfile } from '../types';
-import { Send, Smile, Paperclip, MoreVertical, Search, Phone, Video } from 'lucide-react';
+import { Send, Smile, Paperclip, MoreVertical, Search, Phone, Video, Check, CheckCheck } from 'lucide-react';
+import { writeBatch } from 'firebase/firestore';
 
 export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
     const { user } = useAuth();
@@ -42,6 +43,28 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
         return unsubscribe;
     }, [chatId, user]);
 
+    // Mark messages as seen
+    useEffect(() => {
+        if (!chatId || !user || messages.length === 0) return;
+
+        const markAsSeen = async () => {
+            const unseenMessages = messages.filter(
+                (msg) => msg.senderId !== user.uid && msg.status !== 'seen'
+            );
+
+            if (unseenMessages.length > 0) {
+                const batch = writeBatch(db);
+                unseenMessages.forEach((msg) => {
+                    const msgRef = doc(db, 'chats', chatId, 'messages', msg.id);
+                    batch.update(msgRef, { status: 'seen' });
+                });
+                await batch.commit();
+            }
+        };
+
+        markAsSeen();
+    }, [chatId, user, messages]);
+
     useEffect(() => {
         scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
@@ -58,7 +81,8 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
             text: messageText,
             senderId: user?.uid,
             timestamp: serverTimestamp(),
-            type: 'text'
+            type: 'text',
+            status: 'sent'
         });
 
         // Update last message in chat doc
@@ -137,6 +161,15 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
                                 marginTop: '4px'
                             }}>
                                 {msg.timestamp && new Date(msg.timestamp.toMillis()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                {msg.senderId === user?.uid && (
+                                    <span style={{ marginLeft: '4px' }}>
+                                        {msg.status === 'seen' ? (
+                                            <CheckCheck size={16} color="#53bdeb" />
+                                        ) : (
+                                            <Check size={16} color="rgba(255,255,255,0.5)" />
+                                        )}
+                                    </span>
+                                )}
                             </div>
                         </div>
                     </div>
