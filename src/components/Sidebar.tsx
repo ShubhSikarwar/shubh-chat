@@ -18,12 +18,13 @@ const ChatListItem: React.FC<{
 
         const q = query(
             collection(db, 'chats', chat.id, 'messages'),
-            where('senderId', '!=', currentUser.uid),
             where('status', '!=', 'seen')
         );
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
-            setUnreadCount(snapshot.docs.length);
+            // Firestore doesn't allow multiple '!=' filters, so we filter senderId client-side
+            const unreadDocs = snapshot.docs.filter(doc => doc.data().senderId !== currentUser.uid);
+            setUnreadCount(unreadDocs.length);
         });
 
         return unsubscribe;
