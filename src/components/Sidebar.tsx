@@ -191,7 +191,10 @@ export const Sidebar: React.FC<{ onSelectChat: (chatId: string) => void }> = ({ 
                 alignItems: 'center',
                 height: '60px'
             }}>
-                <img src={user?.photoURL || ''} alt="" style={{ width: '40px', height: '40px', borderRadius: '50%' }} />
+                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    <img src={user?.photoURL || ''} alt="" style={{ width: '40px', height: '40px', borderRadius: '50%' }} />
+                    <span style={{ fontWeight: 'bold', fontSize: '18px', color: 'var(--text-primary)' }}>Shubh Chat</span>
+                </div>
                 <div style={{ display: 'flex', gap: '16px', color: 'var(--text-secondary)' }}>
                     <MessageSquarePlus size={24} style={{ cursor: 'pointer' }} />
                     <LogOut size={24} onClick={logout} style={{ cursor: 'pointer' }} />
