@@ -28,7 +28,8 @@ import {
     CheckCheck,
     Clock,
     Hourglass,
-    Flame
+    Flame,
+    BellRing
 } from 'lucide-react';
 import EmojiPicker from 'emoji-picker-react';
 
@@ -45,6 +46,7 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
     const [uploading, setUploading] = useState(false);
     const [activeReactionId, setActiveReactionId] = useState<string | null>(null);
     const [currentTime, setCurrentTime] = useState(Date.now());
+    const [isShaking, setIsShaking] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
     const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const emojiPickerRef = useRef<HTMLDivElement>(null);
@@ -56,6 +58,20 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
         const timer = setInterval(() => setCurrentTime(Date.now()), 1000);
         return () => clearInterval(timer);
     }, []);
+
+    // Handle Buzz Trigger
+    useEffect(() => {
+        if (!chatData?.buzz || !user) return;
+
+        const buzzTime = chatData.buzz.timestamp?.toMillis() || 0;
+        // Buzz is "fresh" if it happened in the last 2 seconds
+        if (chatData.buzz.senderId !== user.uid && (Date.now() - buzzTime < 2000)) {
+            setIsShaking(true);
+            const audio = new Audio('/notification.mp3'); // Reusing notification sound for now
+            audio.play().catch(e => console.log("Audio buzz error", e));
+            setTimeout(() => setIsShaking(false), 1000);
+        }
+    }, [chatData?.buzz, user?.uid]);
 
     // Listens to Chat Metadata
     useEffect(() => {
@@ -283,6 +299,32 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
         setActiveReactionId(null);
     };
 
+    const handleBuzz = async () => {
+        if (!user || !chatId) return;
+
+        const now = Timestamp.now();
+        const fiveMinsAgo = now.toMillis() - 5 * 60 * 1000;
+
+        const myLastBuzzes = chatData?.lastBuzzes?.[user.uid] || [];
+        // Extract toMillis if it's a Timestamp object
+        const recentBuzzes = myLastBuzzes.filter((t: any) => (t.toMillis ? t.toMillis() : t.seconds * 1000) > fiveMinsAgo);
+
+        if (recentBuzzes.length >= 2) {
+            alert("Take a breath! You can only buzz 2 times every 5 minutes.");
+            return;
+        }
+
+        const newBuzzes = [...recentBuzzes, now];
+
+        await updateDoc(doc(db, 'chats', chatId), {
+            buzz: {
+                senderId: user.uid,
+                timestamp: now
+            },
+            [`lastBuzzes.${user.uid}`]: newBuzzes
+        });
+    };
+
     if (!chatId) return (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-chat)' }}>
             <div style={{ textAlign: 'center', opacity: 0.5 }}>
@@ -294,7 +336,7 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
     );
 
     return (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'var(--bg-chat)', position: 'relative' }}>
+        <div className={isShaking ? 'shake' : ''} style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'var(--bg-chat)', position: 'relative' }}>
             {/* Chat Header */}
             <div style={{ padding: '10px 16px', background: 'var(--bg-header)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', height: '60px', borderBottom: '1px solid var(--border)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -316,7 +358,28 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
                         </div>
                     </div>
                 </div>
-                <div style={{ display: 'flex', gap: '20px', color: 'var(--text-dim)' }}>
+                <div style={{ display: 'flex', gap: '20px', color: 'var(--text-dim)', alignItems: 'center' }}>
+                    <button
+                        onClick={handleBuzz}
+                        style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            background: 'rgba(255, 193, 7, 0.1)',
+                            color: '#ffc107',
+                            padding: '4px 10px',
+                            borderRadius: '12px',
+                            fontSize: '12px',
+                            fontWeight: 'bold',
+                            border: '1px solid rgba(255, 193, 7, 0.3)',
+                            transition: 'all 0.2s'
+                        }}
+                        onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255, 193, 7, 0.2)'}
+                        onMouseOut={(e) => e.currentTarget.style.background = 'rgba(255, 193, 7, 0.1)'}
+                    >
+                        <BellRing size={16} />
+                        BUZZ
+                    </button>
                     <Video size={20} /> <Phone size={20} /> <Search size={20} /> <MoreVertical size={20} />
                 </div>
             </div>

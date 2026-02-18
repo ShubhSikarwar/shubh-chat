@@ -23,6 +23,11 @@ export interface Chat {
         deadline: Timestamp;
         label: string;
     } | null;
+    buzz?: {
+        senderId: string;
+        timestamp: Timestamp;
+    } | null;
+    lastBuzzes?: { [uid: string]: Timestamp[] };
 }
 
 export interface Message {
