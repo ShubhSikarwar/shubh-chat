@@ -4,6 +4,7 @@ import { db } from '../firebase';
 import { collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, doc, updateDoc, writeBatch, Timestamp } from 'firebase/firestore';
 import { Message, UserProfile } from '../types';
 import { Send, Smile, Paperclip, MoreVertical, Search, Phone, Video, Check, CheckCheck, Clock, Hourglass } from 'lucide-react';
+import EmojiPicker from 'emoji-picker-react';
 
 export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
     const { user } = useAuth();
@@ -13,8 +14,10 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
     const [isOtherTyping, setIsOtherTyping] = useState(false);
     const [chatData, setChatData] = useState<any>(null);
     const [showPromiseMenu, setShowPromiseMenu] = useState(false);
+    const [showEmojiPicker, setShowEmojiPicker] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
     const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+    const emojiPickerRef = useRef<HTMLDivElement>(null);
 
     // Listens to Chat Metadata (participants, lastMessage, typing status)
     useEffect(() => {
@@ -112,6 +115,20 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
     useEffect(() => {
         scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
+
+    useEffect(() => {
+        const handleClickOutside = (event: MouseEvent) => {
+            if (emojiPickerRef.current && !emojiPickerRef.current.contains(event.target as Node)) {
+                setShowEmojiPicker(false);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, []);
+
+    const onEmojiClick = (emojiData: any) => {
+        setNewMessage(prev => prev + emojiData.emoji);
+    };
 
     const handleInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         setNewMessage(e.target.value);
@@ -331,7 +348,18 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
                     style={{ cursor: 'pointer' }}
                     onClick={() => setShowPromiseMenu(!showPromiseMenu)}
                 />
-                <Smile color="var(--text-dim)" style={{ cursor: 'pointer' }} />
+                <div style={{ position: 'relative' }}>
+                    <Smile
+                        color={showEmojiPicker ? 'var(--accent)' : "var(--text-dim)"}
+                        style={{ cursor: 'pointer' }}
+                        onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                    />
+                    {showEmojiPicker && (
+                        <div ref={emojiPickerRef} style={{ position: 'absolute', bottom: '50px', left: '0', zIndex: 1000 }}>
+                            <EmojiPicker onEmojiClick={onEmojiClick} theme={'dark' as any} />
+                        </div>
+                    )}
+                </div>
                 <Paperclip color="var(--text-dim)" style={{ cursor: 'pointer' }} />
                 <form onSubmit={handleSend} style={{ flex: 1 }}>
                     <input

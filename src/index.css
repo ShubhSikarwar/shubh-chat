@@ -11,7 +11,7 @@
   --text-dim: #667781;
   --accent: #00a884;
   --border: #313d45;
-  --pulse-color: rgba(0, 168, 132, 0.4);
+  --pulse-color: rgba(255, 75, 145, 0.4);
   --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 }
 
@@ -22,18 +22,18 @@
   }
 
   50% {
-    box-shadow: 0 0 0 10px rgba(0, 168, 132, 0);
+    box-shadow: 0 0 0 10px rgba(255, 75, 145, 0);
     transform: scale(1.05);
   }
 
   100% {
-    box-shadow: 0 0 0 0 rgba(0, 168, 132, 0);
+    box-shadow: 0 0 0 0 rgba(255, 75, 145, 0);
     transform: scale(1);
   }
 }
 
 .pulse-avatar {
-  border: 2px solid var(--accent);
+  border: 2px solid #ff4b91;
   animation: heartbeat 1.5s infinite ease-in-out;
 }
 
