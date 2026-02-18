@@ -156,7 +156,7 @@
 
 .shake {
   animation: shake 0.5s;
-  animation-iteration-count: 8;
+  animation-iteration-count: 5;
 }
 
 @keyframes flicker {

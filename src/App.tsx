@@ -32,7 +32,7 @@ const MainApp: React.FC = () => {
             const isFresh = Math.abs(Date.now() - buzzTime) < 5000;
 
             if (isFresh && !isShaking) {
-              // Trigger shake effect globally (4 seconds)
+              // Trigger shake effect globally (2.5 seconds)
               setIsShaking(true);
               const audio = new Audio('/notification.mp3');
               audio.play().catch(e => console.log("Global buzz audio error", e));
@@ -43,8 +43,8 @@ const MainApp: React.FC = () => {
 
               setBuzzNotification({ senderName: senderData?.displayName || 'Someone', id: data.id });
 
-              setTimeout(() => setBuzzNotification(null), 3000);
-              setTimeout(() => setIsShaking(false), 4000);
+              setTimeout(() => setBuzzNotification(null), 2500);
+              setTimeout(() => setIsShaking(false), 2500);
             }
           }
         }
