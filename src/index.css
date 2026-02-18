@@ -10,8 +10,44 @@
   --text-secondary: #8696a0;
   --text-dim: #667781;
   --accent: #00a884;
-  --border: #222d34;
+  --border: #313d45;
+  --pulse-color: rgba(0, 168, 132, 0.4);
   --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+@keyframes heartbeat {
+  0% {
+    box-shadow: 0 0 0 0 var(--pulse-color);
+    transform: scale(1);
+  }
+
+  50% {
+    box-shadow: 0 0 0 10px rgba(0, 168, 132, 0);
+    transform: scale(1.05);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(0, 168, 132, 0);
+    transform: scale(1);
+  }
+}
+
+.pulse-avatar {
+  border: 2px solid var(--accent);
+  animation: heartbeat 1.5s infinite ease-in-out;
+}
+
+.focus-bridge-badge {
+  background: rgba(255, 193, 7, 0.1);
+  color: #ffc107;
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid rgba(255, 193, 7, 0.2);
+  margin-top: 4px;
 }
 
 * {
@@ -40,7 +76,7 @@ body {
   height: 100%;
   display: flex;
   background-color: var(--bg-main);
-  box-shadow: 0 6px 18px rgba(0,0,0,0.5);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
   position: relative;
 }
 
@@ -48,9 +84,11 @@ body {
 ::-webkit-scrollbar {
   width: 6px;
 }
+
 ::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.1);
 }
+
 ::-webkit-scrollbar-track {
   background: transparent;
 }
@@ -75,8 +113,15 @@ input {
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .fade-in {

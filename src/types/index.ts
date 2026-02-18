@@ -7,6 +7,7 @@ export interface UserProfile {
     email: string | null;
     lastSeen?: Timestamp;
     status: 'online' | 'offline';
+    activeChatId?: string | null;
 }
 
 export interface Chat {
@@ -17,6 +18,11 @@ export interface Chat {
     status: 'pending' | 'accepted' | 'rejected';
     requestedBy: string; // UID of the person who sent the request
     typing?: { [uid: string]: boolean };
+    replyPromise?: {
+        uid: string;
+        deadline: Timestamp;
+        label: string;
+    } | null;
 }
 
 export interface Message {

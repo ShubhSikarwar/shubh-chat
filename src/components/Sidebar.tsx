@@ -44,8 +44,10 @@ const ChatListItem: React.FC<{
             onMouseOver={(e) => e.currentTarget.style.background = 'var(--bg-active)'}
             onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
         >
-            <img src={chat.otherUser?.photoURL || ''} style={{ width: '48px', height: '48px', borderRadius: '50%' }} />
-            <div style={{ flex: 1 }}>
+            <div className={chat.otherUser?.activeChatId === chat.id ? 'pulse-avatar' : ''} style={{ borderRadius: '50%', padding: '2px', alignSelf: 'center' }}>
+                <img src={chat.otherUser?.photoURL || ''} style={{ width: '48px', height: '48px', borderRadius: '50%', display: 'block' }} />
+            </div>
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span style={{ fontWeight: '500' }}>{chat.otherUser?.displayName}</span>
                     {chat.lastMessageTimestamp && (
@@ -101,7 +103,7 @@ const ChatListItem: React.FC<{
                     </div>
                 </div>
             </div>
-        </div>
+        </div >
     );
 };
 

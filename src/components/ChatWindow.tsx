@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
-import { collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, doc, updateDoc, writeBatch } from 'firebase/firestore';
+import { collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, doc, updateDoc, writeBatch, Timestamp } from 'firebase/firestore';
 import { Message, UserProfile } from '../types';
-import { Send, Smile, Paperclip, MoreVertical, Search, Phone, Video, Check, CheckCheck } from 'lucide-react';
+import { Send, Smile, Paperclip, MoreVertical, Search, Phone, Video, Check, CheckCheck, Clock, Hourglass } from 'lucide-react';
 
 export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
     const { user } = useAuth();
@@ -11,6 +11,8 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
     const [newMessage, setNewMessage] = useState('');
     const [otherUser, setOtherUser] = useState<UserProfile | null>(null);
     const [isOtherTyping, setIsOtherTyping] = useState(false);
+    const [chatData, setChatData] = useState<any>(null);
+    const [showPromiseMenu, setShowPromiseMenu] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
     const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -21,6 +23,7 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
         const unsubscribe = onSnapshot(doc(db, 'chats', chatId), (snapshot) => {
             if (snapshot.exists()) {
                 const data = snapshot.data();
+                setChatData(data);
                 const participants = data.participants as string[];
                 const otherId = participants.find(id => id !== user.uid);
 
@@ -32,7 +35,14 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
             }
         });
 
-        return unsubscribe;
+        // Set activeChatId for heartbeat pulse
+        const userRef = doc(db, 'users', user.uid);
+        updateDoc(userRef, { activeChatId: chatId });
+
+        return () => {
+            unsubscribe();
+            updateDoc(userRef, { activeChatId: null });
+        };
     }, [chatId, user]);
 
     // Listens to Other User's Profile (presence, photo, name)
@@ -148,10 +158,11 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
             status: 'sent'
         });
 
-        // Update last message in chat doc
+        // Update last message in chat doc and clear reply promise
         await updateDoc(doc(db, 'chats', chatId), {
             lastMessage: messageText,
-            lastMessageTimestamp: serverTimestamp()
+            lastMessageTimestamp: serverTimestamp(),
+            replyPromise: null
         });
     };
 
@@ -178,12 +189,22 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
                 borderBottom: '1px solid var(--border)'
             }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    <img src={otherUser?.photoURL || ''} style={{ width: '40px', height: '40px', borderRadius: '50%' }} />
+                    <div className={otherUser?.activeChatId === chatId ? 'pulse-avatar' : ''} style={{ borderRadius: '50%', padding: '2px' }}>
+                        <img src={otherUser?.photoURL || ''} style={{ width: '40px', height: '40px', borderRadius: '50%', display: 'block' }} />
+                    </div>
                     <div>
                         <h3 style={{ fontSize: '16px', fontWeight: '500' }}>{otherUser?.displayName}</h3>
-                        <p style={{ fontSize: '12px', color: isOtherTyping ? 'var(--accent)' : 'var(--text-secondary)' }}>
-                            {isOtherTyping ? 'typing...' : (otherUser?.status === 'online' ? 'online' : 'offline')}
-                        </p>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                            <p style={{ fontSize: '12px', color: isOtherTyping ? 'var(--accent)' : 'var(--text-secondary)' }}>
+                                {isOtherTyping ? 'typing...' : (otherUser?.status === 'online' ? 'online' : 'offline')}
+                            </p>
+                            {chatData?.replyPromise && chatData.replyPromise.uid === otherUser?.uid && (
+                                <div className="focus-bridge-badge">
+                                    <Hourglass size={12} />
+                                    <span>Will reply {chatData.replyPromise.label}</span>
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
                 <div style={{ display: 'flex', gap: '20px', color: 'var(--text-dim)' }}>
@@ -246,8 +267,70 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
                 background: 'var(--bg-header)',
                 display: 'flex',
                 alignItems: 'center',
-                gap: '12px'
+                gap: '12px',
+                position: 'relative'
             }}>
+                {showPromiseMenu && (
+                    <div style={{
+                        position: 'absolute',
+                        bottom: '100%',
+                        left: '16px',
+                        background: 'var(--bg-sidebar)',
+                        border: '1px solid var(--border)',
+                        borderRadius: '8px',
+                        padding: '8px',
+                        boxShadow: '0 -4px 12px rgba(0,0,0,0.3)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '4px',
+                        zIndex: 10
+                    }}>
+                        <p style={{ fontSize: '12px', color: 'var(--text-dim)', padding: '4px 8px' }}>Promise to reply:</p>
+                        {[
+                            { label: 'in 10 mins', mins: 10 },
+                            { label: 'in 1 hour', mins: 60 },
+                            { label: 'tonight', mins: 240 },
+                            { label: 'Clear', mins: 0 }
+                        ].map(opt => (
+                            <button
+                                key={opt.label}
+                                onClick={async () => {
+                                    if (opt.mins === 0) {
+                                        await updateDoc(doc(db, 'chats', chatId), { replyPromise: null });
+                                    } else {
+                                        const deadline = new Date(Date.now() + opt.mins * 60000);
+                                        await updateDoc(doc(db, 'chats', chatId), {
+                                            replyPromise: {
+                                                uid: user?.uid,
+                                                deadline: Timestamp.fromDate(deadline),
+                                                label: opt.label
+                                            }
+                                        });
+                                    }
+                                    setShowPromiseMenu(false);
+                                }}
+                                style={{
+                                    padding: '8px 12px',
+                                    borderRadius: '4px',
+                                    textAlign: 'left',
+                                    fontSize: '13px',
+                                    color: 'var(--text-primary)',
+                                    background: 'transparent',
+                                    cursor: 'pointer'
+                                }}
+                                onMouseOver={(e) => e.currentTarget.style.background = 'var(--bg-active)'}
+                                onMouseOut={(e) => e.currentTarget.style.background = 'transparent'}
+                            >
+                                {opt.label}
+                            </button>
+                        ))}
+                    </div>
+                )}
+                <Clock
+                    color={chatData?.replyPromise?.uid === user?.uid ? 'var(--accent)' : "var(--text-dim)"}
+                    style={{ cursor: 'pointer' }}
+                    onClick={() => setShowPromiseMenu(!showPromiseMenu)}
+                />
                 <Smile color="var(--text-dim)" style={{ cursor: 'pointer' }} />
                 <Paperclip color="var(--text-dim)" style={{ cursor: 'pointer' }} />
                 <form onSubmit={handleSend} style={{ flex: 1 }}>
