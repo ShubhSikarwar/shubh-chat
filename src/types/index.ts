@@ -35,6 +35,7 @@ export interface Message {
     reactions?: { [uid: string]: string };
     isSelfDestruct?: boolean;
     selfDestructTime?: number; // In seconds
+    seenAt?: Timestamp | null;
     fileUrl?: string;
     fileName?: string;
 }

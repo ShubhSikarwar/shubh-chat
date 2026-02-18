@@ -44,11 +44,18 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
     const [isSelfDestructActive, setIsSelfDestructActive] = useState(false);
     const [uploading, setUploading] = useState(false);
     const [activeReactionId, setActiveReactionId] = useState<string | null>(null);
+    const [currentTime, setCurrentTime] = useState(Date.now());
     const scrollRef = useRef<HTMLDivElement>(null);
     const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const emojiPickerRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const prevMessagesLength = useRef(0);
+
+    // Update current time every second for countdowns
+    useEffect(() => {
+        const timer = setInterval(() => setCurrentTime(Date.now()), 1000);
+        return () => clearInterval(timer);
+    }, []);
 
     // Listens to Chat Metadata
     useEffect(() => {
@@ -143,7 +150,10 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
                 const batch = writeBatch(db);
                 unseenMessages.forEach((msg) => {
                     const msgRef = doc(db, 'chats', chatId, 'messages', msg.id);
-                    batch.update(msgRef, { status: 'seen' });
+                    batch.update(msgRef, {
+                        status: 'seen',
+                        seenAt: serverTimestamp()
+                    });
                 });
                 await batch.commit();
             }
@@ -156,12 +166,12 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
         scrollRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
 
-    // Handle self-destruct countdown
+    // Handle self-destruct background deletion
     useEffect(() => {
         const interval = setInterval(() => {
             messages.forEach(async (msg) => {
-                if (msg.isSelfDestruct && msg.status === 'seen') {
-                    const elapsed = (Date.now() - msg.timestamp.toMillis()) / 1000;
+                if (msg.isSelfDestruct && msg.seenAt) {
+                    const elapsed = (Date.now() - msg.seenAt.toMillis()) / 1000;
                     if (elapsed >= (msg.selfDestructTime || 20)) {
                         await deleteDoc(doc(db, 'chats', chatId, 'messages', msg.id));
                     }
@@ -326,10 +336,10 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
                                     ))}
                                 </div>
                             )}
-                            {msg.isSelfDestruct && (
+                            {msg.isSelfDestruct && msg.seenAt && (
                                 <div className="self-destruct-timer">
                                     <Flame size={12} />
-                                    <span>Destructing in {Math.max(0, Math.floor(20 - (Date.now() - (msg.timestamp?.toMillis() || Date.now())) / 1000))}s</span>
+                                    <span>Destructing in {Math.max(0, Math.floor(20 - (currentTime - msg.seenAt.toMillis()) / 1000))}s</span>
                                 </div>
                             )}
                             {msg.type === 'image' && msg.fileUrl && (
