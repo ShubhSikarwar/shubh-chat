@@ -18,6 +18,7 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
     const scrollRef = useRef<HTMLDivElement>(null);
     const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const emojiPickerRef = useRef<HTMLDivElement>(null);
+    const prevMessagesLength = useRef(0);
 
     // Listens to Chat Metadata (participants, lastMessage, typing status)
     useEffect(() => {
@@ -84,11 +85,23 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
         );
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
-            setMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Message)));
+            const newMessages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Message));
+
+            // Play sound for incoming message if a new one is added by the other user
+            if (newMessages.length > prevMessagesLength.current && prevMessagesLength.current > 0) {
+                const lastMsg = newMessages[newMessages.length - 1];
+                if (lastMsg.senderId !== user?.uid) {
+                    const audio = new Audio('/notification.mp3');
+                    audio.play().catch(e => console.log("Audio receive error", e));
+                }
+            }
+
+            setMessages(newMessages);
+            prevMessagesLength.current = newMessages.length;
         });
 
         return unsubscribe;
-    }, [chatId]);
+    }, [chatId, user]);
 
     // Mark messages as seen
     useEffect(() => {
@@ -205,6 +218,10 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
             lastMessageTimestamp: serverTimestamp(),
             replyPromise: null
         });
+
+        // Play sent sound
+        const audio = new Audio('/sent.mp3');
+        audio.play().catch(e => console.log("Audio sent error", e));
     };
 
     if (!chatId) return (
