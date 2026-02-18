@@ -30,6 +30,11 @@ export interface Message {
     text: string;
     senderId: string;
     timestamp: Timestamp;
-    type: 'text' | 'image';
-    status?: 'sent' | 'delivered' | 'seen';
+    type: 'text' | 'image' | 'video' | 'file';
+    status: 'sent' | 'delivered' | 'seen';
+    reactions?: { [uid: string]: string };
+    isSelfDestruct?: boolean;
+    selfDestructTime?: number; // In seconds
+    fileUrl?: string;
+    fileName?: string;
 }
