@@ -10,6 +10,7 @@ import { Chat } from './types';
 const MainApp: React.FC = () => {
   const { user, loading } = useAuth();
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [isShaking, setIsShaking] = useState(false);
 
   // Global Buzz Listener: When someone buzzes User A, User A is moved to that chat automatically.
   useEffect(() => {
@@ -27,10 +28,19 @@ const MainApp: React.FC = () => {
 
           if (data.buzz && data.buzz.senderId !== user.uid) {
             const buzzTime = data.buzz.timestamp?.toMillis() || 0;
-            const isFresh = Date.now() - buzzTime < 2000;
+            // Use a wider window (5s) for freshness to account for potential clock skew
+            const isFresh = Math.abs(Date.now() - buzzTime) < 5000;
 
-            if (isFresh && activeChatId !== data.id) {
-              setActiveChatId(data.id);
+            if (isFresh) {
+              // Trigger shake effect globally
+              setIsShaking(true);
+              const audio = new Audio('/notification.mp3');
+              audio.play().catch(e => console.log("Global buzz audio error", e));
+              setTimeout(() => setIsShaking(false), 1000);
+
+              if (activeChatId !== data.id) {
+                setActiveChatId(data.id);
+              }
             }
           }
         }
@@ -54,7 +64,7 @@ const MainApp: React.FC = () => {
   }
 
   return (
-    <div className="app-container">
+    <div className={`app-container ${isShaking ? 'shake' : ''}`}>
       <Sidebar onSelectChat={(id) => setActiveChatId(id)} />
       <ChatWindow chatId={activeChatId || ''} />
     </div>

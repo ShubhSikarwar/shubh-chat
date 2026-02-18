@@ -46,7 +46,6 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
     const [uploading, setUploading] = useState(false);
     const [activeReactionId, setActiveReactionId] = useState<string | null>(null);
     const [currentTime, setCurrentTime] = useState(Date.now());
-    const [isShaking, setIsShaking] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
     const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const emojiPickerRef = useRef<HTMLDivElement>(null);
@@ -58,20 +57,6 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
         const timer = setInterval(() => setCurrentTime(Date.now()), 1000);
         return () => clearInterval(timer);
     }, []);
-
-    // Handle Buzz Trigger
-    useEffect(() => {
-        if (!chatData?.buzz || !user) return;
-
-        const buzzTime = chatData.buzz.timestamp?.toMillis() || 0;
-        // Buzz is "fresh" if it happened in the last 2 seconds
-        if (chatData.buzz.senderId !== user.uid && (Date.now() - buzzTime < 2000)) {
-            setIsShaking(true);
-            const audio = new Audio('/notification.mp3'); // Reusing notification sound for now
-            audio.play().catch(e => console.log("Audio buzz error", e));
-            setTimeout(() => setIsShaking(false), 1000);
-        }
-    }, [chatData?.buzz, user?.uid]);
 
     // Listens to Chat Metadata
     useEffect(() => {
@@ -336,7 +321,7 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
     );
 
     return (
-        <div className={isShaking ? 'shake' : ''} style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'var(--bg-chat)', position: 'relative' }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'var(--bg-chat)', position: 'relative' }}>
             {/* Chat Header */}
             <div style={{ padding: '10px 16px', background: 'var(--bg-header)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', height: '60px', borderBottom: '1px solid var(--border)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
