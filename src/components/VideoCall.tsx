@@ -8,7 +8,6 @@ import {
     collection,
     serverTimestamp,
     Timestamp,
-    getDoc,
 } from 'firebase/firestore';
 import SimplePeer from 'simple-peer';
 import {
@@ -39,95 +38,128 @@ export const VideoCall: React.FC<VideoCallProps> = ({ chatId, currentUser, other
     const callStartTimeRef = useRef<number | null>(null);
     const durationTimerRef = useRef<NodeJS.Timeout | null>(null);
     const missedCallTimerRef = useRef<NodeJS.Timeout | null>(null);
+    const callStatusRef = useRef<string>('calling');
+    const peerSignaledRef = useRef(false);
 
-    // Start local camera on mount
     useEffect(() => {
-        startLocalStream();
-        initiateCall();
-
-        return () => {
-            cleanup();
+        // Sequential: get camera FIRST, then initiate call
+        const init = async () => {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                localStreamRef.current = stream;
+                if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+                await initiateCall(stream);
+            } catch (e) {
+                console.error("Camera/mic access error:", e);
+                alert("Could not access camera/microphone. Please allow permissions and try again.");
+                onClose();
+            }
         };
+        init();
+        return () => cleanup();
     }, []);
 
-    // Listen for call updates (answer from other side)
+    // Listen for answer from receiver
     useEffect(() => {
         const unsubscribe = onSnapshot(doc(db, 'chats', chatId), (snap) => {
             const data = snap.data();
             if (!data?.call) return;
             const call = data.call;
 
-            if (call.status === 'active' && callStatus !== 'active') {
-                setCallStatus('active');
+            // When receiver answers: status becomes 'active' and answer is set
+            if (call.status === 'active' && call.answer && peerRef.current && !peerSignaledRef.current) {
+                peerSignaledRef.current = true;
                 if (missedCallTimerRef.current) clearTimeout(missedCallTimerRef.current);
-
-                // Process answer if we're the caller
-                if (call.callerUid === currentUser.uid && call.answer && peerRef.current) {
-                    try {
-                        peerRef.current.signal(call.answer);
-                    } catch (e) {
-                        console.log("Signal error", e);
-                    }
+                try {
+                    peerRef.current.signal(call.answer);
+                } catch (e) {
+                    console.error("Signal answer error:", e);
                 }
-
-                // Start duration timer
-                callStartTimeRef.current = Date.now();
-                durationTimerRef.current = setInterval(() => {
-                    setCallDuration(Math.floor((Date.now() - callStartTimeRef.current!) / 1000));
-                }, 1000);
             }
 
-            if (call.status === 'ended' && callStatus !== 'ended') {
+            if (call.status === 'ended' && callStatusRef.current !== 'ended') {
+                callStatusRef.current = 'ended';
                 setCallStatus('ended');
                 cleanup();
-                setTimeout(onClose, 2000);
+                setTimeout(onClose, 1500);
             }
 
-            // Process incoming ICE candidates
-            if (call.iceCandidates && peerRef.current && callStatus !== 'ended') {
-                // Handled by simple-peer internally
+            if (call.status === 'missed' && callStatusRef.current !== 'missed') {
+                callStatusRef.current = 'missed';
+                setCallStatus('missed');
+                cleanup();
+                setTimeout(onClose, 2500);
             }
         });
-
         return unsubscribe;
-    }, [chatId, callStatus]);
+    }, [chatId]);
 
-    // Duration timer display
     const formatDuration = (secs: number) => {
         const m = Math.floor(secs / 60).toString().padStart(2, '0');
         const s = (secs % 60).toString().padStart(2, '0');
         return `${m}:${s}`;
     };
 
-    const startLocalStream = async () => {
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-            localStreamRef.current = stream;
-            if (localVideoRef.current) {
-                localVideoRef.current.srcObject = stream;
-            }
-        } catch (e) {
-            console.error("Camera error", e);
-        }
-    };
-
-    const initiateCall = async () => {
-        // Write call invite to Firestore
+    const initiateCall = async (stream: MediaStream) => {
+        // Step 1: Write call metadata (no offer yet)
         await updateDoc(doc(db, 'chats', chatId), {
             call: {
                 callerId: currentUser.uid,
                 callerName: currentUser.displayName || 'Someone',
                 status: 'calling',
+                offer: null,
+                answer: null,
                 timestamp: Timestamp.now(),
             }
         });
 
-        // Give them 30 seconds to answer before "missed"
+        // Step 2: Create WebRTC peer as initiator
+        const peer = new SimplePeer({
+            initiator: true,
+            trickle: false,
+            stream,
+        });
+
+        // Step 3: When offer is ready, write it to Firestore — receiver will pick it up
+        peer.on('signal', async (offerSignal) => {
+            console.log("Caller generated offer, writing to Firestore");
+            await updateDoc(doc(db, 'chats', chatId), {
+                'call.offer': offerSignal,
+            });
+        });
+
+        peer.on('stream', (remoteStream) => {
+            console.log("Caller received remote stream");
+            if (remoteVideoRef.current) {
+                remoteVideoRef.current.srcObject = remoteStream;
+            }
+            setCallStatus('active');
+            setCallStatus('active');
+            callStatusRef.current = 'active';
+            callStartTimeRef.current = Date.now();
+            durationTimerRef.current = setInterval(() => {
+                setCallDuration(Math.floor((Date.now() - callStartTimeRef.current!) / 1000));
+            }, 1000);
+        });
+
+        peer.on('connect', () => {
+            console.log("WebRTC peer connected!");
+        });
+
+        peer.on('close', () => {
+            if (callStatusRef.current !== 'ended') endCall();
+        });
+
+        peer.on('error', (err) => {
+            console.error("Peer error:", err);
+        });
+
+        peerRef.current = peer;
+
+        // Step 4: Start 30s missed call timer
         missedCallTimerRef.current = setTimeout(async () => {
-            const snap = await getDoc(doc(db, 'chats', chatId));
-            const callData = snap.data()?.call;
-            if (callData?.status === 'calling') {
-                // Send missed call message
+            if (callStatusRef.current === 'calling') {
+                console.log("No answer after 30s — marking as missed");
                 await addDoc(collection(db, 'chats', chatId, 'messages'), {
                     text: `📹 Missed video call from ${currentUser.displayName}`,
                     senderId: currentUser.uid,
@@ -136,50 +168,16 @@ export const VideoCall: React.FC<VideoCallProps> = ({ chatId, currentUser, other
                     status: 'sent',
                 });
                 await updateDoc(doc(db, 'chats', chatId), {
-                    call: { ...callData, status: 'missed' },
-                    lastMessage: `📹 Missed video call`,
+                    'call.status': 'missed',
+                    lastMessage: '📹 Missed video call',
                     lastMessageTimestamp: serverTimestamp(),
                 });
+                callStatusRef.current = 'missed';
                 setCallStatus('missed');
                 cleanup();
                 setTimeout(onClose, 2500);
             }
         }, 30000);
-
-        // Create WebRTC peer (initiator)
-        if (!localStreamRef.current) return;
-
-        const peer = new SimplePeer({
-            initiator: true,
-            trickle: false,
-            stream: localStreamRef.current,
-        });
-
-        peer.on('signal', async (signal) => {
-            await updateDoc(doc(db, 'chats', chatId), {
-                'call.offer': signal,
-            });
-        });
-
-        peer.on('stream', (remoteStream) => {
-            if (remoteVideoRef.current) {
-                remoteVideoRef.current.srcObject = remoteStream;
-            }
-        });
-
-        peer.on('connect', () => {
-            setCallStatus('active');
-        });
-
-        peer.on('close', () => {
-            if (callStatus !== 'ended') endCall();
-        });
-
-        peer.on('error', (err) => {
-            console.error("Peer error:", err);
-        });
-
-        peerRef.current = peer;
     };
 
     const cleanup = () => {
@@ -191,70 +189,49 @@ export const VideoCall: React.FC<VideoCallProps> = ({ chatId, currentUser, other
     };
 
     const endCall = async () => {
+        if (callStatusRef.current === 'ended') return;
+        callStatusRef.current = 'ended';
         setCallStatus('ended');
-        const snap = await getDoc(doc(db, 'chats', chatId));
-        const callData = snap.data()?.call;
-        if (callData && callData.status !== 'ended') {
+        try {
             await updateDoc(doc(db, 'chats', chatId), { 'call.status': 'ended' });
-        }
+        } catch (e) { }
         cleanup();
         setTimeout(onClose, 1500);
     };
 
     const toggleMute = () => {
-        if (localStreamRef.current) {
-            localStreamRef.current.getAudioTracks().forEach(t => { t.enabled = isMuted; });
-            setIsMuted(!isMuted);
-        }
+        localStreamRef.current?.getAudioTracks().forEach(t => { t.enabled = isMuted; });
+        setIsMuted(!isMuted);
     };
 
     const toggleCamera = () => {
-        if (localStreamRef.current) {
-            localStreamRef.current.getVideoTracks().forEach(t => { t.enabled = isCamOff; });
-            setIsCamOff(!isCamOff);
-        }
+        localStreamRef.current?.getVideoTracks().forEach(t => { t.enabled = isCamOff; });
+        setIsCamOff(!isCamOff);
     };
 
     const toggleScreenShare = async () => {
         if (isScreenSharing) {
-            // Switch back to camera
-            if (screenStreamRef.current) {
-                screenStreamRef.current.getTracks().forEach(t => t.stop());
-                screenStreamRef.current = null;
-            }
-            if (localStreamRef.current && peerRef.current) {
-                const videoTrack = localStreamRef.current.getVideoTracks()[0];
-                const sender = (peerRef.current as any)._pc?.getSenders()?.find((s: RTCRtpSender) => s.track?.kind === 'video');
-                if (sender && videoTrack) sender.replaceTrack(videoTrack);
-                if (localVideoRef.current) localVideoRef.current.srcObject = localStreamRef.current;
-            }
+            screenStreamRef.current?.getTracks().forEach(t => t.stop());
+            screenStreamRef.current = null;
+            const videoTrack = localStreamRef.current?.getVideoTracks()[0];
+            const sender = (peerRef.current as any)?._pc?.getSenders()?.find((s: RTCRtpSender) => s.track?.kind === 'video');
+            if (sender && videoTrack) sender.replaceTrack(videoTrack);
+            if (localVideoRef.current && localStreamRef.current) localVideoRef.current.srcObject = localStreamRef.current;
             setIsScreenSharing(false);
         } else {
             try {
                 const screenStream = await (navigator.mediaDevices as any).getDisplayMedia({ video: true, audio: false });
                 screenStreamRef.current = screenStream;
                 const screenTrack = screenStream.getVideoTracks()[0];
-
-                // Replace video track in peer connection
-                if (peerRef.current) {
-                    const sender = (peerRef.current as any)._pc?.getSenders()?.find((s: RTCRtpSender) => s.track?.kind === 'video');
-                    if (sender) sender.replaceTrack(screenTrack);
-                }
+                const sender = (peerRef.current as any)?._pc?.getSenders()?.find((s: RTCRtpSender) => s.track?.kind === 'video');
+                if (sender) sender.replaceTrack(screenTrack);
                 if (localVideoRef.current) localVideoRef.current.srcObject = screenStream;
-
                 screenTrack.onended = () => toggleScreenShare();
                 setIsScreenSharing(true);
             } catch (e) {
                 console.error("Screen share failed", e);
             }
         }
-    };
-
-    const statusMessages: Record<string, string> = {
-        calling: `Calling ${otherUser.displayName}...`,
-        active: formatDuration(callDuration),
-        ended: 'Call Ended',
-        missed: 'Missed — No Answer',
     };
 
     const statusColors: Record<string, string> = {
@@ -265,65 +242,30 @@ export const VideoCall: React.FC<VideoCallProps> = ({ chatId, currentUser, other
     };
 
     return (
-        <div style={{
-            position: 'absolute',
-            inset: 0,
-            background: '#0a0a0f',
-            zIndex: 1000,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontFamily: 'Inter, sans-serif',
-        }}>
-            {/* Remote Video (full screen) */}
-            <video
-                ref={remoteVideoRef}
-                autoPlay
-                playsInline
-                style={{
-                    position: 'absolute',
-                    inset: 0,
-                    width: '100%',
-                    height: '100%',
-                    objectFit: 'cover',
-                    opacity: callStatus === 'active' ? 1 : 0,
-                    transition: 'opacity 0.5s',
-                }}
-            />
+        <div style={{ position: 'absolute', inset: 0, background: '#0a0a0f', zIndex: 1000, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', fontFamily: 'Inter, sans-serif' }}>
+            {/* Remote Video */}
+            <video ref={remoteVideoRef} autoPlay playsInline style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: callStatus === 'active' ? 1 : 0, transition: 'opacity 0.5s' }} />
 
-            {/* Overlay gradient */}
-            <div style={{
-                position: 'absolute',
-                inset: 0,
-                background: callStatus === 'active'
-                    ? 'linear-gradient(to bottom, rgba(0,0,0,0.5) 0%, transparent 30%, transparent 70%, rgba(0,0,0,0.7) 100%)'
-                    : 'linear-gradient(135deg, #0d1117 0%, #1a1f2e 100%)',
-                zIndex: 1
-            }} />
+            {/* Overlay */}
+            <div style={{ position: 'absolute', inset: 0, background: callStatus === 'active' ? 'linear-gradient(to bottom, rgba(0,0,0,0.5) 0%, transparent 30%, transparent 70%, rgba(0,0,0,0.7) 100%)' : 'linear-gradient(135deg, #0d1117 0%, #1a1f2e 100%)', zIndex: 1 }} />
 
-            {/* Calling / Missed State UI  */}
+            {/* Calling / Missed UI */}
             {callStatus !== 'active' && (
                 <div style={{ position: 'relative', zIndex: 2, textAlign: 'center' }}>
-                    <div style={{
-                        width: '100px', height: '100px', borderRadius: '50%',
-                        background: `linear-gradient(135deg, #1a1f2e, #2a2f3e)`,
-                        margin: '0 auto 16px',
-                        border: `3px solid ${statusColors[callStatus]}`,
-                        overflow: 'hidden',
-                        animation: callStatus === 'calling' ? 'callPulse 1.5s ease-in-out infinite' : 'none'
-                    }}>
-                        <img src={otherUser.photoURL || ''} alt={otherUser.displayName || ''} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    <div style={{ width: '100px', height: '100px', borderRadius: '50%', margin: '0 auto 16px', border: `3px solid ${statusColors[callStatus]}`, overflow: 'hidden', animation: callStatus === 'calling' ? 'callPulse 1.5s ease-in-out infinite' : 'none' }}>
+                        <img src={otherUser.photoURL || ''} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     </div>
                     <h2 style={{ color: 'white', fontSize: '22px', marginBottom: '8px' }}>{otherUser.displayName}</h2>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'center' }}>
                         {callStatus === 'missed' && <PhoneMissed size={14} color={statusColors[callStatus]} />}
-                        <p style={{ color: statusColors[callStatus], fontSize: '14px' }}>{statusMessages[callStatus]}</p>
+                        <p style={{ color: statusColors[callStatus], fontSize: '14px' }}>
+                            {callStatus === 'calling' ? `Calling ${otherUser.displayName}...` : callStatus === 'missed' ? 'No Answer' : 'Call Ended'}
+                        </p>
                     </div>
                 </div>
             )}
 
-            {/* Active call: Status bar */}
+            {/* Active call status bar */}
             {callStatus === 'active' && (
                 <div style={{ position: 'absolute', top: '20px', left: '50%', transform: 'translateX(-50%)', zIndex: 3, textAlign: 'center' }}>
                     <p style={{ color: '#22c55e', fontWeight: 'bold', fontSize: '14px' }}>{formatDuration(callDuration)}</p>
@@ -331,77 +273,23 @@ export const VideoCall: React.FC<VideoCallProps> = ({ chatId, currentUser, other
                 </div>
             )}
 
-            {/* Local Video (PiP) */}
-            <div style={{
-                position: 'absolute',
-                bottom: '120px',
-                right: '20px',
-                width: '130px',
-                height: '180px',
-                borderRadius: '12px',
-                overflow: 'hidden',
-                border: '2px solid rgba(255,255,255,0.2)',
-                zIndex: 3,
-                background: '#1a1f2e',
-            }}>
+            {/* Local PiP */}
+            <div style={{ position: 'absolute', bottom: '120px', right: '20px', width: '130px', height: '180px', borderRadius: '12px', overflow: 'hidden', border: '2px solid rgba(255,255,255,0.2)', zIndex: 3, background: '#1a1f2e' }}>
                 <video ref={localVideoRef} autoPlay muted playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }} />
             </div>
 
             {/* Controls */}
-            <div style={{
-                position: 'absolute',
-                bottom: '32px',
-                left: '50%',
-                transform: 'translateX(-50%)',
-                zIndex: 3,
-                display: 'flex',
-                gap: '16px',
-                alignItems: 'center',
-            }}>
+            <div style={{ position: 'absolute', bottom: '32px', left: '50%', transform: 'translateX(-50%)', zIndex: 3, display: 'flex', gap: '16px', alignItems: 'center' }}>
                 {[
-                    {
-                        icon: isMuted ? <MicOff size={20} /> : <Mic size={20} />,
-                        label: isMuted ? 'Unmute' : 'Mute',
-                        action: toggleMute,
-                        active: isMuted,
-                        color: '#374151'
-                    },
-                    {
-                        icon: isCamOff ? <VideoOff size={20} /> : <Video size={20} />,
-                        label: isCamOff ? 'Cam On' : 'Cam Off',
-                        action: toggleCamera,
-                        active: isCamOff,
-                        color: '#374151'
-                    },
-                    {
-                        icon: <Monitor size={20} />,
-                        label: isScreenSharing ? 'Stop Share' : 'Share Screen',
-                        action: toggleScreenShare,
-                        active: isScreenSharing,
-                        color: isScreenSharing ? '#3b82f6' : '#374151'
-                    },
-                    {
-                        icon: <PhoneOff size={22} />,
-                        label: 'End Call',
-                        action: endCall,
-                        active: false,
-                        color: '#ef4444'
-                    },
+                    { icon: isMuted ? <MicOff size={20} /> : <Mic size={20} />, label: isMuted ? 'Unmute' : 'Mute', action: toggleMute, color: '#374151' },
+                    { icon: isCamOff ? <VideoOff size={20} /> : <Video size={20} />, label: isCamOff ? 'Cam On' : 'Cam Off', action: toggleCamera, color: '#374151' },
+                    { icon: <Monitor size={20} />, label: isScreenSharing ? 'Stop Share' : 'Share Screen', action: toggleScreenShare, color: isScreenSharing ? '#3b82f6' : '#374151' },
+                    { icon: <PhoneOff size={22} />, label: 'End Call', action: endCall, color: '#ef4444' },
                 ].map((btn, i) => (
                     <div key={i} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px' }}>
-                        <button
-                            onClick={btn.action}
-                            style={{
-                                width: '52px', height: '52px', borderRadius: '50%',
-                                background: btn.color,
-                                color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                cursor: 'pointer', border: 'none',
-                                transition: 'transform 0.15s, opacity 0.15s',
-                                boxShadow: '0 4px 15px rgba(0,0,0,0.3)',
-                            }}
+                        <button onClick={btn.action} style={{ width: '52px', height: '52px', borderRadius: '50%', background: btn.color, color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', border: 'none', transition: 'transform 0.15s', boxShadow: '0 4px 15px rgba(0,0,0,0.3)' }}
                             onMouseOver={e => (e.currentTarget.style.transform = 'scale(1.1)')}
-                            onMouseOut={e => (e.currentTarget.style.transform = 'scale(1)')}
-                        >
+                            onMouseOut={e => (e.currentTarget.style.transform = 'scale(1)')}>
                             {btn.icon}
                         </button>
                         <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.6)' }}>{btn.label}</span>
@@ -410,19 +298,10 @@ export const VideoCall: React.FC<VideoCallProps> = ({ chatId, currentUser, other
             </div>
 
             {/* Close button */}
-            <button
-                onClick={endCall}
-                style={{
-                    position: 'absolute', top: '16px', right: '16px', zIndex: 5,
-                    background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: '50%',
-                    width: '36px', height: '36px', cursor: 'pointer', color: 'white',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                }}
-            >
+            <button onClick={endCall} style={{ position: 'absolute', top: '16px', right: '16px', zIndex: 5, background: 'rgba(255,255,255,0.1)', border: 'none', borderRadius: '50%', width: '36px', height: '36px', cursor: 'pointer', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                 <X size={18} />
             </button>
 
-            {/* Pulse animation */}
             <style>{`
                 @keyframes callPulse {
                     0%, 100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.5); }

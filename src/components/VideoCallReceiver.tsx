@@ -1,20 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../firebase';
-import { doc, updateDoc } from 'firebase/firestore';
+import { doc, updateDoc, onSnapshot } from 'firebase/firestore';
 import SimplePeer from 'simple-peer';
 import { Mic, MicOff, Video, VideoOff, PhoneOff, Monitor, X } from 'lucide-react';
-import { User } from 'firebase/auth';
 
 interface VideoCallReceiverProps {
     chatId: string;
-    currentUser: User;
     callerName: string;
-    offer: any;
     onClose: () => void;
 }
 
 export const VideoCallReceiver: React.FC<VideoCallReceiverProps> = ({
-    chatId, callerName, offer, onClose
+    chatId, callerName, onClose
 }) => {
     const [isMuted, setIsMuted] = useState(false);
     const [isCamOff, setIsCamOff] = useState(false);
@@ -29,43 +26,91 @@ export const VideoCallReceiver: React.FC<VideoCallReceiverProps> = ({
     const screenStreamRef = useRef<MediaStream | null>(null);
     const startTimeRef = useRef<number | null>(null);
     const timerRef = useRef<NodeJS.Timeout | null>(null);
+    const statusRef = useRef<string>('connecting');
+    const answerWrittenRef = useRef(false);
 
     useEffect(() => {
         startReceivingCall();
         return () => cleanup();
     }, []);
 
+    // Listen for call end from caller side
+    useEffect(() => {
+        const unsubscribe = onSnapshot(doc(db, 'chats', chatId), (snap) => {
+            const call = snap.data()?.call;
+            if (!call) return;
+            if ((call.status === 'ended' || call.status === 'missed') && statusRef.current !== 'ended') {
+                statusRef.current = 'ended';
+                setStatus('ended');
+                cleanup();
+                setTimeout(onClose, 1500);
+            }
+        });
+        return unsubscribe;
+    }, [chatId]);
+
     const startReceivingCall = async () => {
         try {
+            // Step 1: Get local camera/mic
             const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
             localStreamRef.current = stream;
             if (localVideoRef.current) localVideoRef.current.srcObject = stream;
 
-            const peer = new SimplePeer({ initiator: false, trickle: false, stream });
+            // Step 2: Wait for the offer to be available in Firestore (poll via onSnapshot)
+            const unsubscribe = onSnapshot(doc(db, 'chats', chatId), async (snap) => {
+                const call = snap.data()?.call;
+                if (!call?.offer || answerWrittenRef.current) return;
+                if (call.status === 'ended' || call.status === 'missed') return;
 
-            peer.on('signal', async (signal) => {
-                await updateDoc(doc(db, 'chats', chatId), {
-                    'call.answer': signal,
-                    'call.status': 'active',
+                // Offer is ready — stop listening and create peer
+                unsubscribe();
+                answerWrittenRef.current = true;
+
+                console.log("Receiver: offer received, creating peer");
+
+                const peer = new SimplePeer({
+                    initiator: false,
+                    trickle: false,
+                    stream,
                 });
-                setStatus('active');
-                startTimeRef.current = Date.now();
-                timerRef.current = setInterval(() => {
-                    setCallDuration(Math.floor((Date.now() - startTimeRef.current!) / 1000));
-                }, 1000);
+
+                // Step 3: When answer is generated, write to Firestore and set status active
+                peer.on('signal', async (answerSignal) => {
+                    console.log("Receiver: answer generated, writing to Firestore");
+                    await updateDoc(doc(db, 'chats', chatId), {
+                        'call.answer': answerSignal,
+                        'call.status': 'active',
+                    });
+                    statusRef.current = 'active';
+                    setStatus('active');
+                    startTimeRef.current = Date.now();
+                    timerRef.current = setInterval(() => {
+                        setCallDuration(Math.floor((Date.now() - startTimeRef.current!) / 1000));
+                    }, 1000);
+                });
+
+                // Step 4: Receive caller's video/audio stream
+                peer.on('stream', (remoteStream) => {
+                    console.log("Receiver: got remote stream from caller");
+                    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStream;
+                });
+
+                peer.on('close', () => {
+                    if (statusRef.current !== 'ended') endCall();
+                });
+
+                peer.on('error', (e) => console.error("Receiver peer error:", e));
+
+                // Step 5: Signal the peer with the caller's offer
+                console.log("Receiver: signaling peer with offer");
+                peer.signal(call.offer);
+
+                peerRef.current = peer;
             });
 
-            peer.on('stream', (remoteStream) => {
-                if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStream;
-            });
-
-            peer.on('close', () => endCall());
-            peer.on('error', (e) => console.error("Peer error", e));
-
-            if (offer) peer.signal(offer);
-            peerRef.current = peer;
         } catch (e) {
-            console.error("Receiver media error", e);
+            console.error("Receiver media error:", e);
+            alert("Could not access camera/microphone. Please allow permissions.");
             onClose();
         }
     };
@@ -78,8 +123,12 @@ export const VideoCallReceiver: React.FC<VideoCallReceiverProps> = ({
     };
 
     const endCall = async () => {
+        if (statusRef.current === 'ended') return;
+        statusRef.current = 'ended';
         setStatus('ended');
-        await updateDoc(doc(db, 'chats', chatId), { 'call.status': 'ended' });
+        try {
+            await updateDoc(doc(db, 'chats', chatId), { 'call.status': 'ended' });
+        } catch (e) { }
         cleanup();
         setTimeout(onClose, 1500);
     };
@@ -125,11 +174,11 @@ export const VideoCallReceiver: React.FC<VideoCallReceiverProps> = ({
             <video ref={remoteVideoRef} autoPlay playsInline style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: status === 'active' ? 1 : 0, transition: 'opacity 0.5s' }} />
             <div style={{ position: 'absolute', inset: 0, background: status === 'active' ? 'linear-gradient(to bottom, rgba(0,0,0,0.5) 0%, transparent 30%, transparent 70%, rgba(0,0,0,0.7) 100%)' : 'linear-gradient(135deg,#0d1117,#1a1f2e)', zIndex: 1 }} />
 
-            {/* Status */}
+            {/* Status text */}
             {status !== 'active' && (
                 <div style={{ position: 'relative', zIndex: 2, textAlign: 'center' }}>
                     <h2 style={{ color: 'white', fontSize: '22px', marginBottom: '8px' }}>{callerName}</h2>
-                    <p style={{ color: status === 'ended' ? '#ef4444' : '#ffc107', fontSize: '14px' }}>
+                    <p style={{ color: status === 'ended' ? '#ef4444' : '#22c55e', fontSize: '14px' }}>
                         {status === 'connecting' ? 'Connecting...' : 'Call Ended'}
                     </p>
                 </div>

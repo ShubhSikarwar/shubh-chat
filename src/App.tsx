@@ -55,10 +55,11 @@ const MainApp: React.FC = () => {
             }
           }
 
-          // Handle incoming call
+          // Handle incoming call — ONLY when offer is ready in Firestore
           if (data.call &&
             data.call.status === 'calling' &&
             data.call.callerId !== user.uid &&
+            data.call.offer &&          // ← KEY FIX: wait for offer before showing popup
             !incomingCall &&
             !acceptedCall
           ) {
@@ -175,9 +176,7 @@ const MainApp: React.FC = () => {
       {acceptedCall && (
         <VideoCallReceiver
           chatId={acceptedCall.chatId}
-          currentUser={user}
           callerName={acceptedCall.callerName}
-          offer={acceptedCall.offer}
           onClose={() => setAcceptedCall(null)}
         />
       )}
