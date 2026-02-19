@@ -2,12 +2,31 @@ import React, { useState, useEffect, useRef } from 'react';
 import { db } from '../firebase';
 import { doc, updateDoc, onSnapshot } from 'firebase/firestore';
 import SimplePeer from 'simple-peer';
-import { Mic, MicOff, Video, VideoOff, PhoneOff, Monitor, X } from 'lucide-react';
+import { Mic, MicOff, Video, VideoOff, PhoneOff, Monitor, X, CameraOff } from 'lucide-react';
 
 interface VideoCallReceiverProps {
     chatId: string;
     callerName: string;
     onClose: () => void;
+}
+
+/** Try to get user media with graceful fallbacks — never throws */
+async function getLocalStream(): Promise<MediaStream | null> {
+    if (!navigator.mediaDevices?.getUserMedia) {
+        console.warn("getUserMedia not supported (HTTP context?)");
+        return null;
+    }
+    try {
+        return await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    } catch (e1) {
+        console.warn("Video+Audio failed:", e1);
+    }
+    try {
+        return await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+    } catch (e2) {
+        console.warn("Audio-only also failed:", e2);
+    }
+    return null;
 }
 
 export const VideoCallReceiver: React.FC<VideoCallReceiverProps> = ({
@@ -18,6 +37,7 @@ export const VideoCallReceiver: React.FC<VideoCallReceiverProps> = ({
     const [isScreenSharing, setIsScreenSharing] = useState(false);
     const [callDuration, setCallDuration] = useState(0);
     const [status, setStatus] = useState<'connecting' | 'active' | 'ended'>('connecting');
+    const [noCamera, setNoCamera] = useState(false);
 
     const localVideoRef = useRef<HTMLVideoElement>(null);
     const remoteVideoRef = useRef<HTMLVideoElement>(null);
@@ -27,7 +47,7 @@ export const VideoCallReceiver: React.FC<VideoCallReceiverProps> = ({
     const startTimeRef = useRef<number | null>(null);
     const timerRef = useRef<NodeJS.Timeout | null>(null);
     const statusRef = useRef<string>('connecting');
-    const answerWrittenRef = useRef(false);
+    const peerCreatedRef = useRef(false);
 
     useEffect(() => {
         startReceivingCall();
@@ -50,69 +70,70 @@ export const VideoCallReceiver: React.FC<VideoCallReceiverProps> = ({
     }, [chatId]);
 
     const startReceivingCall = async () => {
-        try {
-            // Step 1: Get local camera/mic
-            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        // Step 1: Get local media (non-blocking — proceed even if it fails)
+        const stream = await getLocalStream();
+        if (!stream) {
+            setNoCamera(true);
+            console.warn("VideoCallReceiver: proceeding without local media");
+        } else {
             localStreamRef.current = stream;
             if (localVideoRef.current) localVideoRef.current.srcObject = stream;
+        }
 
-            // Step 2: Wait for the offer to be available in Firestore (poll via onSnapshot)
-            const unsubscribe = onSnapshot(doc(db, 'chats', chatId), async (snap) => {
-                const call = snap.data()?.call;
-                if (!call?.offer || answerWrittenRef.current) return;
-                if (call.status === 'ended' || call.status === 'missed') return;
+        // Step 2: Watch Firestore for offer to become available, then create peer
+        const unsubOffer = onSnapshot(doc(db, 'chats', chatId), async (snap) => {
+            const call = snap.data()?.call;
 
-                // Offer is ready — stop listening and create peer
-                unsubscribe();
-                answerWrittenRef.current = true;
+            // Guard: only run once, only when offer is present
+            if (!call?.offer || peerCreatedRef.current) return;
+            if (call.status === 'ended' || call.status === 'missed') return;
 
-                console.log("Receiver: offer received, creating peer");
+            peerCreatedRef.current = true;
+            unsubOffer(); // stop listening for offer changes
 
-                const peer = new SimplePeer({
-                    initiator: false,
-                    trickle: false,
-                    stream,
+            console.log("Receiver: offer available, creating peer");
+
+            const peerConfig: SimplePeer.Options = {
+                initiator: false,
+                trickle: false,
+                ...(stream ? { stream } : {}),
+            };
+            const peer = new SimplePeer(peerConfig);
+
+            // Step 3: When answer is generated, write it back and set status active
+            peer.on('signal', async (answerSignal) => {
+                console.log("Receiver: answer generated, writing to Firestore");
+                await updateDoc(doc(db, 'chats', chatId), {
+                    'call.answer': answerSignal,
+                    'call.status': 'active',
                 });
-
-                // Step 3: When answer is generated, write to Firestore and set status active
-                peer.on('signal', async (answerSignal) => {
-                    console.log("Receiver: answer generated, writing to Firestore");
-                    await updateDoc(doc(db, 'chats', chatId), {
-                        'call.answer': answerSignal,
-                        'call.status': 'active',
-                    });
-                    statusRef.current = 'active';
-                    setStatus('active');
-                    startTimeRef.current = Date.now();
-                    timerRef.current = setInterval(() => {
-                        setCallDuration(Math.floor((Date.now() - startTimeRef.current!) / 1000));
-                    }, 1000);
-                });
-
-                // Step 4: Receive caller's video/audio stream
-                peer.on('stream', (remoteStream) => {
-                    console.log("Receiver: got remote stream from caller");
-                    if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStream;
-                });
-
-                peer.on('close', () => {
-                    if (statusRef.current !== 'ended') endCall();
-                });
-
-                peer.on('error', (e) => console.error("Receiver peer error:", e));
-
-                // Step 5: Signal the peer with the caller's offer
-                console.log("Receiver: signaling peer with offer");
-                peer.signal(call.offer);
-
-                peerRef.current = peer;
+                statusRef.current = 'active';
+                setStatus('active');
+                startTimeRef.current = Date.now();
+                timerRef.current = setInterval(() => {
+                    setCallDuration(Math.floor((Date.now() - startTimeRef.current!) / 1000));
+                }, 1000);
             });
 
-        } catch (e) {
-            console.error("Receiver media error:", e);
-            alert("Could not access camera/microphone. Please allow permissions.");
-            onClose();
-        }
+            // Step 4: Receive caller's remote stream
+            peer.on('stream', (remoteStream) => {
+                console.log("Receiver: got remote stream");
+                if (remoteVideoRef.current) remoteVideoRef.current.srcObject = remoteStream;
+            });
+
+            peer.on('connect', () => {
+                console.log("Receiver: WebRTC connected!");
+            });
+
+            peer.on('close', () => { if (statusRef.current !== 'ended') endCall(); });
+            peer.on('error', (e) => console.error("Receiver peer error:", e));
+
+            // Step 5: Feed caller's offer into our peer
+            console.log("Receiver: signaling peer with caller's offer");
+            peer.signal(call.offer);
+
+            peerRef.current = peer;
+        });
     };
 
     const cleanup = () => {
@@ -126,9 +147,7 @@ export const VideoCallReceiver: React.FC<VideoCallReceiverProps> = ({
         if (statusRef.current === 'ended') return;
         statusRef.current = 'ended';
         setStatus('ended');
-        try {
-            await updateDoc(doc(db, 'chats', chatId), { 'call.status': 'ended' });
-        } catch (e) { }
+        try { await updateDoc(doc(db, 'chats', chatId), { 'call.status': 'ended' }); } catch (e) { }
         cleanup();
         setTimeout(onClose, 1500);
     };
@@ -162,7 +181,7 @@ export const VideoCallReceiver: React.FC<VideoCallReceiverProps> = ({
                 if (localVideoRef.current) localVideoRef.current.srcObject = screenStream;
                 screenTrack.onended = () => { setIsScreenSharing(false); };
                 setIsScreenSharing(true);
-            } catch (e) { console.error(e); }
+            } catch (e) { console.error("Screen share error:", e); }
         }
     };
 
@@ -170,29 +189,33 @@ export const VideoCallReceiver: React.FC<VideoCallReceiverProps> = ({
 
     return (
         <div style={{ position: 'fixed', inset: 0, background: '#0a0a0f', zIndex: 2000, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-            {/* Remote Video */}
+            {/* Remote Video (full screen) */}
             <video ref={remoteVideoRef} autoPlay playsInline style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', opacity: status === 'active' ? 1 : 0, transition: 'opacity 0.5s' }} />
             <div style={{ position: 'absolute', inset: 0, background: status === 'active' ? 'linear-gradient(to bottom, rgba(0,0,0,0.5) 0%, transparent 30%, transparent 70%, rgba(0,0,0,0.7) 100%)' : 'linear-gradient(135deg,#0d1117,#1a1f2e)', zIndex: 1 }} />
 
-            {/* Status text */}
+            {/* Status */}
             {status !== 'active' && (
                 <div style={{ position: 'relative', zIndex: 2, textAlign: 'center' }}>
                     <h2 style={{ color: 'white', fontSize: '22px', marginBottom: '8px' }}>{callerName}</h2>
                     <p style={{ color: status === 'ended' ? '#ef4444' : '#22c55e', fontSize: '14px' }}>
                         {status === 'connecting' ? 'Connecting...' : 'Call Ended'}
                     </p>
+                    {noCamera && <p style={{ color: 'rgba(255,200,0,0.8)', fontSize: '12px', marginTop: '8px' }}>⚠️ No camera/mic — connecting anyway…</p>}
                 </div>
             )}
             {status === 'active' && (
                 <div style={{ position: 'absolute', top: '20px', left: '50%', transform: 'translateX(-50%)', zIndex: 3, textAlign: 'center' }}>
                     <p style={{ color: '#22c55e', fontWeight: 'bold', fontSize: '14px' }}>{fmt(callDuration)}</p>
-                    <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: '12px' }}>{callerName}</p>
+                    <p style={{ color: 'rgba(255,255,255,0.7)', fontSize: '12px' }}>{callerName}{noCamera ? ' (no cam)' : ''}</p>
                 </div>
             )}
 
             {/* Local PiP */}
-            <div style={{ position: 'absolute', bottom: '120px', right: '20px', width: '130px', height: '180px', borderRadius: '12px', overflow: 'hidden', border: '2px solid rgba(255,255,255,0.2)', zIndex: 3, background: '#1a1f2e' }}>
-                <video ref={localVideoRef} autoPlay muted playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }} />
+            <div style={{ position: 'absolute', bottom: '120px', right: '20px', width: '130px', height: '180px', borderRadius: '12px', overflow: 'hidden', border: '2px solid rgba(255,255,255,0.2)', zIndex: 3, background: '#1a1f2e', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {noCamera
+                    ? <CameraOff size={28} color="rgba(255,255,255,0.3)" />
+                    : <video ref={localVideoRef} autoPlay muted playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }} />
+                }
             </div>
 
             {/* Controls */}
