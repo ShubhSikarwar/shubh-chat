@@ -28,6 +28,15 @@ export interface Chat {
         timestamp: Timestamp;
     } | null;
     lastBuzzes?: { [uid: string]: Timestamp[] };
+    call?: {
+        callerId: string;
+        callerName: string;
+        offer?: any;
+        answer?: any;
+        iceCandidates?: any[];
+        status: 'calling' | 'active' | 'ended' | 'missed';
+        timestamp: Timestamp;
+    } | null;
 }
 
 export interface Message {
@@ -43,4 +52,5 @@ export interface Message {
     seenAt?: Timestamp | null;
     fileUrl?: string;
     fileName?: string;
+    fileSize?: number;
 }

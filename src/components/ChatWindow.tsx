@@ -14,7 +14,7 @@ import {
     Timestamp,
     deleteDoc
 } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { Message, UserProfile } from '../types';
 import {
     Send,
@@ -29,9 +29,13 @@ import {
     Clock,
     Hourglass,
     Flame,
-    BellRing
+    BellRing,
+    FileText,
+    X,
+    Download
 } from 'lucide-react';
 import EmojiPicker from 'emoji-picker-react';
+import { VideoCall } from './VideoCall';
 
 export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
     const { user } = useAuth();
@@ -46,6 +50,9 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
     const [uploading, setUploading] = useState(false);
     const [activeReactionId, setActiveReactionId] = useState<string | null>(null);
     const [currentTime, setCurrentTime] = useState(Date.now());
+    const [pendingFile, setPendingFile] = useState<File | null>(null);
+    const [pendingFilePreview, setPendingFilePreview] = useState<string | null>(null);
+    const [showVideoCall, setShowVideoCall] = useState(false);
     const scrollRef = useRef<HTMLDivElement>(null);
     const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
     const emojiPickerRef = useRef<HTMLDivElement>(null);
@@ -222,6 +229,13 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
 
     const handleSend = async (e: React.FormEvent) => {
         e.preventDefault();
+
+        // If there's a pending file, send it first
+        if (pendingFile) {
+            await sendPendingFile();
+            return;
+        }
+
         if (!newMessage.trim() || !user || !chatId) return;
 
         const messageText = newMessage;
@@ -249,29 +263,63 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
         audio.play().catch(e => console.log("Audio sent error", e));
     };
 
-    const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
-        if (!file || !user || !chatId) return;
+        if (!file) return;
+
+        setPendingFile(file);
+
+        // Generate preview for images
+        if (file.type.startsWith('image/')) {
+            const reader = new FileReader();
+            reader.onload = (ev) => setPendingFilePreview(ev.target?.result as string);
+            reader.readAsDataURL(file);
+        } else {
+            setPendingFilePreview(null);
+        }
+
+        // Reset the input so same file can be reselected
+        if (fileInputRef.current) fileInputRef.current.value = '';
+    };
+
+    const cancelPendingFile = () => {
+        setPendingFile(null);
+        setPendingFilePreview(null);
+    };
+
+    const sendPendingFile = async () => {
+        if (!pendingFile || !user || !chatId) return;
         setUploading(true);
         try {
-            const fileRef = ref(storage, `chats/${chatId}/${Date.now()}_${file.name}`);
-            await uploadBytes(fileRef, file);
+            const fileRef = storageRef(storage, `chats/${chatId}/${Date.now()}_${pendingFile.name}`);
+            await uploadBytes(fileRef, pendingFile);
             const url = await getDownloadURL(fileRef);
+
+            const isImage = pendingFile.type.startsWith('image/');
+            const isVideo = pendingFile.type.startsWith('video/');
+            const msgType = isImage ? 'image' : isVideo ? 'video' : 'file';
+            const lastMsgText = isImage ? '📷 Photo' : isVideo ? '🎥 Video' : `📎 ${pendingFile.name}`;
+
             await addDoc(collection(db, 'chats', chatId, 'messages'), {
-                text: '📷 Photo',
+                text: lastMsgText,
                 senderId: user.uid,
                 timestamp: serverTimestamp(),
-                type: 'image',
+                type: msgType,
                 status: 'sent',
                 fileUrl: url,
-                fileName: file.name
+                fileName: pendingFile.name,
+                fileSize: pendingFile.size,
             });
             await updateDoc(doc(db, 'chats', chatId), {
-                lastMessage: '📷 Photo',
+                lastMessage: lastMsgText,
                 lastMessageTimestamp: serverTimestamp()
             });
+
+            setPendingFile(null);
+            setPendingFilePreview(null);
         } catch (error) {
             console.error("Upload failed", error);
+            alert("Upload failed. Please check Firebase Storage rules.");
         } finally {
             setUploading(false);
         }
@@ -309,6 +357,12 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
         });
     };
 
+    const formatFileSize = (bytes: number) => {
+        if (bytes < 1024) return `${bytes} B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+        return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    };
+
     if (!chatId) return (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-chat)' }}>
             <div style={{ textAlign: 'center', opacity: 0.5 }}>
@@ -321,6 +375,17 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
 
     return (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'var(--bg-chat)', position: 'relative' }}>
+
+            {/* Video Call Overlay */}
+            {showVideoCall && otherUser && (
+                <VideoCall
+                    chatId={chatId}
+                    currentUser={user!}
+                    otherUser={otherUser}
+                    onClose={() => setShowVideoCall(false)}
+                />
+            )}
+
             {/* Chat Header */}
             <div style={{ padding: '10px 16px', background: 'var(--bg-header)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', height: '60px', borderBottom: '1px solid var(--border)' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
@@ -342,7 +407,7 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
                         </div>
                     </div>
                 </div>
-                <div style={{ display: 'flex', gap: '20px', color: 'var(--text-dim)', alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: '16px', color: 'var(--text-dim)', alignItems: 'center' }}>
                     <button
                         onClick={handleBuzz}
                         style={{
@@ -356,7 +421,8 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
                             fontSize: '12px',
                             fontWeight: 'bold',
                             border: '1px solid rgba(255, 193, 7, 0.3)',
-                            transition: 'all 0.2s'
+                            transition: 'all 0.2s',
+                            cursor: 'pointer'
                         }}
                         onMouseOver={(e) => e.currentTarget.style.background = 'rgba(255, 193, 7, 0.2)'}
                         onMouseOut={(e) => e.currentTarget.style.background = 'rgba(255, 193, 7, 0.1)'}
@@ -364,7 +430,14 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
                         <BellRing size={16} />
                         BUZZ
                     </button>
-                    <Video size={20} /> <Phone size={20} /> <Search size={20} /> <MoreVertical size={20} />
+                    <Video
+                        size={20}
+                        style={{ cursor: 'pointer', color: 'var(--accent)' }}
+                        onClick={() => setShowVideoCall(true)}
+                    />
+                    <Phone size={20} style={{ cursor: 'pointer' }} />
+                    <Search size={20} style={{ cursor: 'pointer' }} />
+                    <MoreVertical size={20} style={{ cursor: 'pointer' }} />
                 </div>
             </div>
 
@@ -389,10 +462,38 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
                                     <span>Destructing in {Math.max(0, Math.floor(20 - (currentTime - msg.seenAt.toMillis()) / 1000))}s</span>
                                 </div>
                             )}
+                            {/* Image */}
                             {msg.type === 'image' && msg.fileUrl && (
                                 <img src={msg.fileUrl} alt="sent" className="message-image" onClick={() => window.open(msg.fileUrl)} />
                             )}
-                            <div style={{ wordBreak: 'break-word' }}>{msg.text}</div>
+                            {/* Video */}
+                            {msg.type === 'video' && msg.fileUrl && (
+                                <video controls className="message-image" style={{ maxWidth: '100%', borderRadius: '6px' }}>
+                                    <source src={msg.fileUrl} />
+                                </video>
+                            )}
+                            {/* File */}
+                            {msg.type === 'file' && msg.fileUrl && (
+                                <a href={msg.fileUrl} target="_blank" rel="noopener noreferrer" style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--accent)', textDecoration: 'none', padding: '6px', borderRadius: '6px', background: 'rgba(0,168,132,0.1)' }}>
+                                    <FileText size={20} />
+                                    <div>
+                                        <div style={{ fontSize: '13px', fontWeight: 500 }}>{msg.fileName}</div>
+                                        {msg.fileSize && <div style={{ fontSize: '11px', opacity: 0.7 }}>{formatFileSize(msg.fileSize)}</div>}
+                                    </div>
+                                    <Download size={16} style={{ marginLeft: 'auto' }} />
+                                </a>
+                            )}
+                            {/* Missed call message */}
+                            {msg.type === 'text' && msg.text.startsWith('📹 Missed video call') && (
+                                <div style={{ color: '#ef4444', fontStyle: 'italic', fontSize: '13px' }}>{msg.text}</div>
+                            )}
+                            {/* Regular text — don't show for file messages */}
+                            {msg.type === 'text' && !msg.text.startsWith('📹 Missed video call') && (
+                                <div style={{ wordBreak: 'break-word' }}>{msg.text}</div>
+                            )}
+                            {(msg.type === 'image' || msg.type === 'video') && (
+                                <div style={{ fontSize: '11px', opacity: 0.7, marginTop: '2px' }}>{msg.fileName}</div>
+                            )}
                             {msg.reactions && Object.keys(msg.reactions).length > 0 && (
                                 <div className="reaction-container">
                                     {Object.entries(msg.reactions).slice(0, 3).map(([uid, emoji]) => <span key={uid}>{emoji as React.ReactNode}</span>)}
@@ -412,6 +513,26 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
                 ))}
                 <div ref={scrollRef} />
             </div>
+
+            {/* Pending File Preview Bar */}
+            {pendingFile && (
+                <div style={{ padding: '8px 16px', background: 'var(--bg-active)', borderTop: '1px solid var(--border)', display: 'flex', alignItems: 'center', gap: '12px' }}>
+                    {pendingFilePreview ? (
+                        <img src={pendingFilePreview} alt="preview" style={{ width: '48px', height: '48px', objectFit: 'cover', borderRadius: '6px' }} />
+                    ) : (
+                        <div style={{ width: '48px', height: '48px', background: 'var(--bg-sidebar)', borderRadius: '6px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <FileText size={24} color="var(--accent)" />
+                        </div>
+                    )}
+                    <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: '13px', fontWeight: 500, color: 'var(--text-primary)' }}>{pendingFile.name}</div>
+                        <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{formatFileSize(pendingFile.size)}</div>
+                    </div>
+                    <button onClick={cancelPendingFile} style={{ color: 'var(--text-dim)', cursor: 'pointer' }}>
+                        <X size={20} />
+                    </button>
+                </div>
+            )}
 
             {/* Input Area */}
             <div style={{ padding: '8px 16px', background: 'var(--bg-header)', display: 'flex', alignItems: 'center', gap: '12px', position: 'relative' }}>
@@ -436,13 +557,21 @@ export const ChatWindow: React.FC<{ chatId: string }> = ({ chatId }) => {
                     {showEmojiPicker && <div ref={emojiPickerRef} style={{ position: 'absolute', bottom: '50px', left: '0', zIndex: 1000 }}><EmojiPicker onEmojiClick={onEmojiClick} theme={'dark' as any} /></div>}
                 </div>
                 <div style={{ position: 'relative' }}>
-                    <input type="file" ref={fileInputRef} onChange={handleFileUpload} style={{ display: 'none' }} accept="image/*" />
-                    <Paperclip color={uploading ? 'var(--accent)' : "var(--text-dim)"} style={{ cursor: 'pointer' }} onClick={() => fileInputRef.current?.click()} />
+                    <input type="file" ref={fileInputRef} onChange={handleFileSelect} style={{ display: 'none' }} accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip,.rar" />
+                    <Paperclip color={pendingFile ? 'var(--accent)' : uploading ? '#ffc107' : "var(--text-dim)"} style={{ cursor: 'pointer' }} onClick={() => fileInputRef.current?.click()} />
                 </div>
                 <form onSubmit={handleSend} style={{ flex: 1 }}>
-                    <input type="text" placeholder={isSelfDestructActive ? "Secret Message (20s)" : "Type a message"} value={newMessage} onChange={handleInputChange} style={{ width: '100%', background: 'var(--bg-active)', border: 'none', borderRadius: '8px', padding: '10px 16px', color: isSelfDestructActive ? '#ff4b4b' : 'var(--text-primary)', fontSize: '15px' }} />
+                    <input
+                        type="text"
+                        placeholder={pendingFile ? `Send "${pendingFile.name}"` : isSelfDestructActive ? "Secret Message (20s)" : "Type a message"}
+                        value={newMessage}
+                        onChange={handleInputChange}
+                        style={{ width: '100%', background: 'var(--bg-active)', border: 'none', borderRadius: '8px', padding: '10px 16px', color: isSelfDestructActive ? '#ff4b4b' : 'var(--text-primary)', fontSize: '15px' }}
+                    />
                 </form>
-                <button onClick={handleSend}><Send color={newMessage.trim() ? 'var(--accent)' : 'var(--text-dim)'} /></button>
+                <button onClick={handleSend} disabled={uploading}>
+                    <Send color={(newMessage.trim() || pendingFile) && !uploading ? 'var(--accent)' : 'var(--text-dim)'} />
+                </button>
             </div>
         </div>
     );
